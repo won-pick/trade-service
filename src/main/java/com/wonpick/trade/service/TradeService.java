@@ -11,7 +11,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.wonpick.trade.client.ChatClient;
 import com.wonpick.trade.client.MarketClient;
 import com.wonpick.trade.client.MarketClient.MarketProduct;
 import com.wonpick.trade.client.PaymentClient;
@@ -25,10 +24,12 @@ import com.wonpick.trade.repository.IdempotencyKeyRepository;
 import com.wonpick.trade.repository.TradeRepository;
 
 /**
- * 거래 흐름의 조율자. 구매 문의 → 송금 요청(판매자) → 입금 확인(판매자) → 구매 확정(구매자) / 취소.
+ * 거래 흐름의 조율자. 송금 요청(판매자, 거래 생성) → 입금 확인(판매자) → 구매 확정(구매자) / 취소.
+ * 문의·대화는 Chat 서버의 채팅방이 맡는다. 판매자가 채팅방에서 "송금 요청"을 누르면 화면이 Trade를 직접 부른다.
  *
  * 원칙
  *  - 다른 서버 호출은 DB 트랜잭션 밖에서 한다 (느린 호출이 커넥션을 붙잡지 않게).
+ *  - 중간에 실패하면 앞에서 한 일을 거꾸로 되돌린다 (보상): Payment 실패 → Market 예약 해제 → 거래 취소.
  *  - 상태 변경은 조건부 UPDATE. 바뀐 행이 0이면 다시 읽어서 "이미 목표 상태면 200, 아니면 409".
  *  - 이미 목표 상태인 요청을 다시 보내면 아무 일도 하지 않고 지금 거래를 돌려준다 (멱등).
  */
@@ -37,7 +38,7 @@ public class TradeService {
 
     private static final Logger log = LoggerFactory.getLogger(TradeService.class);
 
-    /** created=false 이면 새로 만들지 않고 기존 거래를 돌려준 것 */
+    /** created=false 이면 같은 키의 재시도라 새로 만들지 않고 처음 거래를 돌려준 것 */
     public record CreateResult(Trade trade, boolean created) {
     }
 
@@ -45,69 +46,87 @@ public class TradeService {
     private final IdempotencyKeyRepository idempotencyKeys;
     private final MarketClient market;
     private final PaymentClient payment;
-    private final ChatClient chat;
     private final TransactionTemplate tx;
 
     public TradeService(TradeRepository trades, IdempotencyKeyRepository idempotencyKeys, MarketClient market,
-            PaymentClient payment, ChatClient chat, PlatformTransactionManager transactionManager) {
+            PaymentClient payment, PlatformTransactionManager transactionManager) {
         this.trades = trades;
         this.idempotencyKeys = idempotencyKeys;
         this.market = market;
         this.payment = payment;
-        this.chat = chat;
         this.tx = new TransactionTemplate(transactionManager);
     }
 
-    // ───────────── ① 구매 문의 ─────────────
+    // ───────────── ① 송금 요청 = 거래 생성 (판매자만) ─────────────
 
-    public CreateResult create(long buyerId, long productId, String idempotencyKey) {
+    public CreateResult requestPayment(long sellerId, long productId, long buyerId, Long chatRoomId,
+            String idempotencyKey) {
         // 같은 키로 다시 왔다 = 재시도. 처음 결과를 그대로 돌려준다 (step-07)
         if (idempotencyKey != null) {
             Optional<Long> existing = idempotencyKeys.findTradeId(idempotencyKey);
             if (existing.isPresent()) {
-                return new CreateResult(getTrade(existing.get()), true);
+                return new CreateResult(getTrade(existing.get()), false);
             }
         }
 
+        // 1) Market 상품 확인 — 판매자 본인 상품이고, 판매 중이어야 한다
         MarketProduct product = market.getProduct(productId);
+        if (!Objects.equals(product.sellerId(), sellerId)) {
+            throw new TradeException(ErrorCode.ROLE_NOT_ALLOWED, "송금 요청은 상품을 올린 판매자만 보낼 수 있습니다.");
+        }
+        if (buyerId == sellerId) {
+            throw new TradeException(ErrorCode.SELF_PURCHASE, "본인에게는 송금을 요청할 수 없습니다.");
+        }
         if (MarketClient.RESERVED.equals(product.status())) {
-            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "다른 구매자와 송금이 진행 중인 상품입니다.");
+            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "다른 구매자와 거래가 진행 중인 상품입니다.");
         }
         if (!MarketClient.ON_SALE.equals(product.status())) {
             throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "판매가 끝난 상품입니다.");
         }
-        if (Objects.equals(product.sellerId(), buyerId)) {
-            throw new TradeException(ErrorCode.SELF_PURCHASE, "본인이 올린 상품은 구매할 수 없습니다.");
-        }
 
-        // 같은 구매자의 중복 문의는 막고, 다른 구매자의 문의는 막지 않는다 (한 상품에 여러 명이 채팅)
-        Optional<Trade> mine = trades.findOpenByProductAndBuyer(productId, buyerId);
-        if (mine.isPresent()) {
-            return new CreateResult(mine.get(), false);
-        }
-
+        // 2) 거래 저장 (PAYMENT_REQUESTED) — 같은 상품에 진행 중인 거래가 있으면 UNIQUE 제약이 막는다
         Long tradeId;
         try {
             tradeId = tx.execute(status -> {
-                long id = trades.insert(productId, product.title(), product.price(), buyerId, product.sellerId());
-                trades.insertHistory(id, null, TradeStatus.REQUESTED, buyerId);
+                long id = trades.insertRequested(productId, product.title(), product.price(), buyerId, sellerId,
+                        chatRoomId);
+                trades.insertHistory(id, null, TradeStatus.PAYMENT_REQUESTED, sellerId);
                 if (idempotencyKey != null) {
-                    idempotencyKeys.save(idempotencyKey, id);   // 같은 키가 동시에 오면 여기서 DB가 거절 → 롤백
+                    idempotencyKeys.save(idempotencyKey, id);
                 }
                 return id;
             });
         } catch (DuplicateKeyException e) {
-            long firstTradeId = idempotencyKeys.findTradeId(idempotencyKey).orElseThrow(() -> e);
-            return new CreateResult(getTrade(firstTradeId), true);
+            // 같은 키가 동시에 두 번 왔거나, 같은 상품에 이미 진행 중인 거래가 있다
+            if (idempotencyKey != null) {
+                Optional<Long> first = idempotencyKeys.findTradeId(idempotencyKey);
+                if (first.isPresent()) {
+                    return new CreateResult(getTrade(first.get()), false);
+                }
+            }
+            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "이 상품은 이미 다른 구매자와 거래가 진행 중입니다.");
+        }
+        Trade trade = getTrade(Objects.requireNonNull(tradeId));
+
+        // 3) Market 상품 예약 (ON_SALE → RESERVED). 실패하면 거래를 취소로 남긴다 (보상)
+        try {
+            market.reserve(productId, trade.tradeId());
+        } catch (TradeException e) {
+            cancelAfterFailure(trade, sellerId, "상품 예약 실패");
+            throw e;
         }
 
-        Trade trade = getTrade(Objects.requireNonNull(tradeId));
-        Long chatRoomId = chat.openRoom(trade);   // 실패해도 거래는 유지 (chat 링크만 빠진다)
-        if (chatRoomId != null) {
-            trades.updateChatRoom(trade.tradeId(), chatRoomId);
-            trade = getTrade(trade.tradeId());
+        // 4) Payment 송금 요청 생성. 실패하면 3)·2)를 거꾸로 되돌린다 (보상)
+        PaymentResponse created;
+        try {
+            created = payment.requestTransfer(trade);
+        } catch (TradeException e) {
+            releaseQuietly(trade);
+            cancelAfterFailure(trade, sellerId, "송금 요청 생성 실패");
+            throw e;
         }
-        return new CreateResult(trade, true);
+        trades.attachPayment(trade.tradeId(), created.paymentId(), created.transferUrl());
+        return new CreateResult(getTrade(trade.tradeId()), true);
     }
 
     // ───────────── 조회 ─────────────
@@ -118,66 +137,11 @@ public class TradeService {
         return trade;
     }
 
-    public List<Trade> list(long memberId, TradeRole role, TradeStatus status, Long productId) {
-        return trades.findByViewer(memberId, role, status, productId);
+    public List<Trade> list(long memberId, TradeRole role, TradeStatus status, Long productId, Long chatRoomId) {
+        return trades.findByViewer(memberId, role, status, productId, chatRoomId);
     }
 
-    // ───────────── ② 송금 요청 (판매자만) ─────────────
-
-    public Trade requestPayment(long tradeId, long memberId) {
-        Trade trade = getTrade(tradeId);
-        requireRole(trade, memberId, TradeRole.SELLER, "송금 요청은 판매자만 보낼 수 있습니다.");
-        if (trade.status() == TradeStatus.PAYMENT_PENDING) {
-            return trade;
-        }
-        if (!trade.status().canRequestPayment()) {
-            throw invalidStatus(trade, "송금 요청");
-        }
-
-        // 1) 이 거래가 상품을 차지 — 같은 상품에 송금 단계 거래는 하나뿐 (UNIQUE 제약)
-        try {
-            if (trades.claimProduct(tradeId) == 0) {
-                return currentOrConflict(tradeId, TradeStatus.PAYMENT_PENDING, "송금 요청");
-            }
-        } catch (DuplicateKeyException e) {
-            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "다른 구매자에게 이미 송금 요청을 보낸 상품입니다.");
-        }
-
-        // 2) Market 상품 예약 (ON_SALE → RESERVED). 실패하면 1)을 되돌린다 (보상)
-        try {
-            market.reserve(trade.productId(), tradeId);
-        } catch (TradeException e) {
-            trades.releaseProduct(tradeId);
-            throw e;
-        }
-
-        // 3) Payment에 송금 요청 생성. 실패하면 2)·1)을 거꾸로 되돌린다 (보상)
-        PaymentResponse created;
-        try {
-            created = payment.requestTransfer(trade);
-        } catch (TradeException e) {
-            releaseQuietly(trade);
-            trades.releaseProduct(tradeId);
-            throw e;
-        }
-
-        // 4) PAYMENT_PENDING
-        Integer updated = tx.execute(status -> {
-            int n = trades.toPaymentPending(tradeId, created.paymentId(), created.transferUrl());
-            if (n == 1) {
-                trades.insertHistory(tradeId, TradeStatus.REQUESTED, TradeStatus.PAYMENT_PENDING, memberId);
-            }
-            return n;
-        });
-        if (updated == null || updated == 0) {
-            return currentOrConflict(tradeId, TradeStatus.PAYMENT_PENDING, "송금 요청");
-        }
-        chat.notify(trade, memberId, "payment-request",
-                "[WON-pick] 송금 요청을 보냈어요. 거래 화면의 '카카오페이로 송금하기'로 %,d원을 보내 주세요.".formatted(trade.price()));
-        return getTrade(tradeId);
-    }
-
-    // ───────────── ③ 입금 확인 (판매자) ─────────────
+    // ───────────── ② 입금 확인 (판매자) ─────────────
 
     public Trade confirmPayment(long tradeId, long memberId) {
         Trade trade = getTrade(tradeId);
@@ -185,7 +149,7 @@ public class TradeService {
         if (trade.status() == TradeStatus.PAID) {
             return trade;
         }
-        if (!trade.status().canConfirmPayment()) {
+        if (!trade.status().canConfirmPayment() || trade.paymentId() == null) {
             throw invalidStatus(trade, "입금 확인");
         }
 
@@ -194,19 +158,17 @@ public class TradeService {
         Integer updated = tx.execute(status -> {
             int n = trades.toPaid(tradeId);
             if (n == 1) {
-                trades.insertHistory(tradeId, TradeStatus.PAYMENT_PENDING, TradeStatus.PAID, memberId);
+                trades.insertHistory(tradeId, TradeStatus.PAYMENT_REQUESTED, TradeStatus.PAID, memberId);
             }
             return n;
         });
         if (updated == null || updated == 0) {
             return currentOrConflict(tradeId, TradeStatus.PAID, "입금 확인");
         }
-        chat.notify(trade, memberId, "payment-confirmed",
-                "[WON-pick] 입금을 확인했어요. 물건을 받으면 거래 화면에서 구매 확정을 눌러 주세요.");
         return getTrade(tradeId);
     }
 
-    // ───────────── ④ 구매 확정 (구매자) ─────────────
+    // ───────────── ③ 구매 확정 (구매자) ─────────────
 
     public Trade complete(long tradeId, long memberId) {
         Trade trade = getTrade(tradeId);
@@ -225,13 +187,6 @@ public class TradeService {
             int n = trades.toCompleted(tradeId);
             if (n == 1) {
                 trades.insertHistory(tradeId, TradeStatus.PAID, TradeStatus.COMPLETED, memberId);
-                // 같은 상품에 문의만 하고 있던 다른 구매자들의 거래는 닫는다
-                for (Trade other : trades.findOtherRequested(trade.productId(), tradeId)) {
-                    if (trades.toCanceled(other.tradeId(), "다른 구매자와 거래가 완료되었습니다.", trade.sellerId()) == 1) {
-                        trades.insertHistory(other.tradeId(), TradeStatus.REQUESTED, TradeStatus.CANCELED,
-                                trade.sellerId());
-                    }
-                }
             }
             return n;
         });
@@ -254,19 +209,16 @@ public class TradeService {
                     trade.status() + " 상태의 거래는 취소할 수 없습니다. 입금이 확인된 뒤에는 취소할 수 없어요.");
         }
 
-        // 송금 요청이 나가 있었다면 Payment 취소 + Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
+        // Payment 송금 요청 취소 + Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
         if (trade.paymentId() != null) {
             payment.cancel(trade.paymentId());
         }
-        if (trade.status() == TradeStatus.PAYMENT_PENDING) {
-            market.release(trade.productId(), tradeId);
-        }
+        market.release(trade.productId(), tradeId);
 
-        TradeStatus from = trade.status();
         Integer updated = tx.execute(status -> {
             int n = trades.toCanceled(tradeId, reason, memberId);
             if (n == 1) {
-                trades.insertHistory(tradeId, from, TradeStatus.CANCELED, memberId);
+                trades.insertHistory(tradeId, TradeStatus.PAYMENT_REQUESTED, TradeStatus.CANCELED, memberId);
             }
             return n;
         });
@@ -278,6 +230,15 @@ public class TradeService {
     }
 
     // ───────────── 공통 ─────────────
+
+    /** 송금 요청 도중 다른 서버가 실패했을 때 — 만들어 둔 거래를 취소로 남기고 상품 차지를 푼다 */
+    private void cancelAfterFailure(Trade trade, long sellerId, String reason) {
+        tx.executeWithoutResult(status -> {
+            if (trades.toCanceled(trade.tradeId(), reason, sellerId) == 1) {
+                trades.insertHistory(trade.tradeId(), TradeStatus.PAYMENT_REQUESTED, TradeStatus.CANCELED, sellerId);
+            }
+        });
+    }
 
     /** 보상 중의 보상 — 이미 실패를 응답하는 중이라, 예약 해제 실패는 로그만 남긴다 */
     private void releaseQuietly(Trade trade) {

@@ -18,7 +18,7 @@ servers:
   market:
     base-url: http://localhost:8082   # market-service 저장소 기본 포트
   chat:
-    base-url: http://localhost:8080   # chat-service 저장소 기본 포트
+    base-url: http://localhost:8080   # chat-service 기본 포트. Trade는 Chat을 부르지 않고 _links.chat 주소에만 쓴다
   payment:
     base-url: http://localhost:8084   # payment-service 포트 미정 (지금은 server.port가 없어 8080이라 Chat과 겹침)
 

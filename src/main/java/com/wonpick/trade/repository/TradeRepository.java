@@ -53,16 +53,24 @@ public class TradeRepository {
         this.jdbc = jdbc;
     }
 
-    public long insert(long productId, String productTitle, long price, long buyerId, long sellerId) {
+    /**
+     * 송금 요청 = 거래 생성. 처음부터 PAYMENT_REQUESTED이고 상품을 차지한다(active_product_id).
+     * 같은 상품에 진행 중인 거래가 이미 있으면 UNIQUE 제약 때문에 DuplicateKeyException.
+     */
+    public long insertRequested(long productId, String productTitle, long price, long buyerId, long sellerId,
+            Long chatRoomId) {
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.sql("""
-                        INSERT INTO trades (product_id, product_title, price, buyer_id, seller_id, status)
-                        VALUES (:productId, :title, :price, :buyerId, :sellerId, 'REQUESTED')""")
+                        INSERT INTO trades (product_id, product_title, price, buyer_id, seller_id, status,
+                                            chat_room_id, active_product_id)
+                        VALUES (:productId, :title, :price, :buyerId, :sellerId, 'PAYMENT_REQUESTED',
+                                :chatRoomId, :productId)""")
                 .param("productId", productId)
                 .param("title", productTitle)
                 .param("price", price)
                 .param("buyerId", buyerId)
                 .param("sellerId", sellerId)
+                .param("chatRoomId", chatRoomId)
                 .update(keyHolder);
         return Objects.requireNonNull(keyHolder.getKey(), "생성된 trade_id가 없습니다").longValue();
     }
@@ -74,29 +82,9 @@ public class TradeRepository {
                 .optional();
     }
 
-    /** 같은 구매자가 같은 상품에 이미 열어 둔(끝나지 않은) 거래 */
-    public Optional<Trade> findOpenByProductAndBuyer(long productId, long buyerId) {
-        return jdbc.sql(SELECT_ALL + " " + """
-                         WHERE product_id = :productId AND buyer_id = :buyerId
-                           AND status IN ('REQUESTED', 'PAYMENT_PENDING', 'PAID')
-                         ORDER BY trade_id DESC LIMIT 1""")
-                .param("productId", productId)
-                .param("buyerId", buyerId)
-                .query(MAPPER)
-                .optional();
-    }
-
-    /** 같은 상품의 다른 문의(REQUESTED) 거래들 — 한 명과 거래가 끝나면 나머지를 닫는다 */
-    public List<Trade> findOtherRequested(long productId, long exceptTradeId) {
-        return jdbc.sql(SELECT_ALL + " WHERE product_id = :productId AND trade_id <> :exceptId AND status = 'REQUESTED'")
-                .param("productId", productId)
-                .param("exceptId", exceptTradeId)
-                .query(MAPPER)
-                .list();
-    }
-
-    /** 내가 구매자이거나 판매자인 거래 목록. role·status·productId는 있으면 거른다 */
-    public List<Trade> findByViewer(long viewerId, TradeRole role, TradeStatus status, Long productId) {
+    /** 내가 구매자이거나 판매자인 거래 목록. role·status·productId·chatRoomId는 있으면 거른다 */
+    public List<Trade> findByViewer(long viewerId, TradeRole role, TradeStatus status, Long productId,
+            Long chatRoomId) {
         StringBuilder sql = new StringBuilder(SELECT_ALL).append(" WHERE ");
         Map<String, Object> params = new HashMap<>();
         params.put("viewer", viewerId);
@@ -116,41 +104,20 @@ public class TradeRepository {
             sql.append(" AND product_id = :productId");
             params.put("productId", productId);
         }
+        if (chatRoomId != null) {
+            sql.append(" AND chat_room_id = :chatRoomId");
+            params.put("chatRoomId", chatRoomId);
+        }
         sql.append(" ORDER BY trade_id DESC");
 
         return jdbc.sql(sql.toString()).params(params).query(MAPPER).list();
     }
 
-    public void updateChatRoom(long tradeId, long chatRoomId) {
-        jdbc.sql("UPDATE trades SET chat_room_id = :chatRoomId WHERE trade_id = :id")
-                .param("chatRoomId", chatRoomId)
-                .param("id", tradeId)
-                .update();
-    }
-
-    /**
-     * 이 거래가 상품을 차지한다 (active_product_id = product_id).
-     * 같은 상품을 다른 거래가 이미 차지했으면 UNIQUE 제약 때문에 DuplicateKeyException.
-     */
-    public int claimProduct(long tradeId) {
+    /** Payment가 만든 송금 요청을 거래에 붙인다 */
+    public int attachPayment(long tradeId, long paymentId, String transferUrl) {
         return jdbc.sql("""
-                        UPDATE trades SET active_product_id = product_id
-                         WHERE trade_id = :id AND status = 'REQUESTED'""")
-                .param("id", tradeId)
-                .update();
-    }
-
-    /** 송금 요청 생성에 실패했을 때 차지를 되돌린다 (보상) */
-    public void releaseProduct(long tradeId) {
-        jdbc.sql("UPDATE trades SET active_product_id = NULL WHERE trade_id = :id AND status = 'REQUESTED'")
-                .param("id", tradeId)
-                .update();
-    }
-
-    public int toPaymentPending(long tradeId, long paymentId, String transferUrl) {
-        return jdbc.sql("""
-                        UPDATE trades SET status = 'PAYMENT_PENDING', payment_id = :paymentId, transfer_url = :transferUrl
-                         WHERE trade_id = :id AND status = 'REQUESTED'""")
+                        UPDATE trades SET payment_id = :paymentId, transfer_url = :transferUrl
+                         WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'""")
                 .param("paymentId", paymentId)
                 .param("transferUrl", transferUrl)
                 .param("id", tradeId)
@@ -158,7 +125,7 @@ public class TradeRepository {
     }
 
     public int toPaid(long tradeId) {
-        return jdbc.sql("UPDATE trades SET status = 'PAID' WHERE trade_id = :id AND status = 'PAYMENT_PENDING'")
+        return jdbc.sql("UPDATE trades SET status = 'PAID' WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'")
                 .param("id", tradeId)
                 .update();
     }
@@ -175,7 +142,7 @@ public class TradeRepository {
         return jdbc.sql("""
                         UPDATE trades SET status = 'CANCELED', active_product_id = NULL,
                                           cancel_reason = :reason, canceled_by = :canceledBy
-                         WHERE trade_id = :id AND status IN ('REQUESTED', 'PAYMENT_PENDING')""")
+                         WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'""")
                 .param("reason", reason)
                 .param("canceledBy", canceledBy)
                 .param("id", tradeId)

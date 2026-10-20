@@ -38,13 +38,13 @@ X-Member-Id: 3
 GET http://localhost:8083/trades?chatRoomId=5
 X-Member-Id: 3
 
-### 6. 구매자 화면 → _links.transfer (카카오페이 송금 링크), cancel
+### 6. 구매자 화면 → _links.pay, cancel
 GET http://localhost:8083/trades/{{tradeId}}
 X-Member-Id: 3
 
-### 7. 판매자 입금 확인 → PAID
-POST http://localhost:8083/trades/{{tradeId}}/confirm-payment
-X-Member-Id: 100
+### 7. 구매자 결제하기 (잔액 이동) → PAID
+POST http://localhost:8083/trades/{{tradeId}}/pay
+X-Member-Id: 3
 
 ### 8. PAID 거래 취소 시도 → 409 INVALID_STATUS
 POST http://localhost:8083/trades/{{tradeId}}/cancel

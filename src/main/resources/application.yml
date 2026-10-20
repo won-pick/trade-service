@@ -14,13 +14,18 @@ spring:
       mode: always          # 시작할 때 schema.sql 실행 (CREATE TABLE IF NOT EXISTS)
 
 # 다른 서버 주소 — 아직 완성 전이면 Apidog Mock 주소로 바꿔서 개발한다
+# 다른 PC에서 돌면 환경 변수로 IP를 넣는다. 예) $env:MARKET_URL="http://172.21.26.31:8082"
 servers:
   market:
-    base-url: http://localhost:8082   # market-service 저장소 기본 포트
+    base-url: ${MARKET_URL:http://localhost:8082}   # market-service 저장소 기본 포트
   chat:
-    base-url: http://localhost:8080   # chat-service 기본 포트. Trade는 Chat을 부르지 않고 _links.chat 주소에만 쓴다
+    base-url: ${CHAT_URL:http://localhost:8080}     # chat-service 기본 포트. Trade는 Chat을 부르지 않고 _links.chat 주소에만 쓴다
   payment:
-    base-url: http://localhost:8084   # payment-service 포트 미정 (지금은 server.port가 없어 8080이라 Chat과 겹침)
+    base-url: ${PAYMENT_URL:http://localhost:8084}  # payment-service 포트 미정 (지금은 server.port가 없어 8080이라 Chat과 겹침)
+
+# 브라우저가 Trade를 직접 부를 때 허용할 화면 주소 (쉼표로 구분)
+trade:
+  allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
 springdoc:
   swagger-ui:

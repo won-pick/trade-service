@@ -32,10 +32,10 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
 /**
- * 거래 자원 /trades. 상태를 바꾸는 요청은 행위 주소(/confirm-payment 등)에 POST.
+ * 거래 자원 /trades. 상태를 바꾸는 요청은 행위 주소(/pay 등)에 POST.
  * 컨트롤러에는 try-catch가 없다 — 실패는 GlobalExceptionHandler가 ProblemDetail로 바꾼다.
  */
-@Tag(name = "Trade", description = "거래: 송금 요청(판매자, 거래 생성) → 입금 확인(판매자) → 구매 확정(구매자) / 취소")
+@Tag(name = "Trade", description = "거래: 결제 요청(판매자, 거래 생성) → 결제(구매자) → 구매 확정(구매자) / 취소")
 @RestController
 @RequestMapping("/trades")
 public class TradeController {
@@ -50,10 +50,10 @@ public class TradeController {
         this.assembler = assembler;
     }
 
-    @Operation(summary = "송금 요청 보내기 (거래 생성, 판매자만)",
-            description = "판매자가 채팅방에서 구매자에게 송금을 요청한다. 이때 거래가 PAYMENT_REQUESTED로 생기고 "
-                    + "Market 상품이 예약(RESERVED)되며 Payment 송금 요청이 만들어진다. "
-                    + "구매자에게는 _links.transfer 로 판매자의 카카오페이 송금 링크가 보인다. "
+    @Operation(summary = "결제 요청 보내기 (거래 생성, 판매자만)",
+            description = "판매자가 채팅방에서 구매자에게 결제를 요청한다. 이때 거래가 PAYMENT_REQUESTED로 생기고 "
+                    + "Market 상품이 예약(RESERVED)되며 Payment 결제 요청서(POST /orders)가 만들어진다. "
+                    + "구매자에게는 _links.pay 가 보인다. "
                     + "같은 Idempotency-Key로 다시 보내면 200 + 처음 거래.")
     @PostMapping
     public ResponseEntity<TradeResponse> create(
@@ -92,12 +92,14 @@ public class TradeController {
         return assembler.toListResponse(trades, memberId);
     }
 
-    @Operation(summary = "입금 확인 (판매자)", description = "판매자가 카카오페이 입금을 확인했다. PAYMENT_REQUESTED → PAID.")
-    @PostMapping("/{tradeId}/confirm-payment")
-    public TradeResponse confirmPayment(
+    @Operation(summary = "결제하기 (구매자)",
+            description = "구매자의 Payment 잔액에서 판매자에게 거래 금액을 옮긴다. PAYMENT_REQUESTED → PAID. "
+                    + "잔액이 부족하거나 계좌가 없으면 422 PAYMENT_REJECTED, 거래는 그대로.")
+    @PostMapping("/{tradeId}/pay")
+    public TradeResponse pay(
             @RequestHeader(MEMBER_HEADER) @Positive long memberId,
             @PathVariable("tradeId") @Positive long tradeId) {
-        return assembler.toResponse(tradeService.confirmPayment(tradeId, memberId), memberId);
+        return assembler.toResponse(tradeService.pay(tradeId, memberId), memberId);
     }
 
     @Operation(summary = "구매 확정 (구매자)",
@@ -109,7 +111,7 @@ public class TradeController {
         return assembler.toResponse(tradeService.complete(tradeId, memberId), memberId);
     }
 
-    @Operation(summary = "거래 취소 (구매자·판매자)", description = "입금 확인(PAID) 전까지만 취소할 수 있다. Market 예약 해제, Payment 송금 요청 취소.")
+    @Operation(summary = "거래 취소 (구매자·판매자)", description = "결제(PAID) 전까지만 취소할 수 있다. Market 예약 해제.")
     @PostMapping("/{tradeId}/cancel")
     public TradeResponse cancel(
             @RequestHeader(MEMBER_HEADER) @Positive long memberId,

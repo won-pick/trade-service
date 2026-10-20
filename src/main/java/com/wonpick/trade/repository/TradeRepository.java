@@ -28,7 +28,7 @@ public class TradeRepository {
 
     private static final String SELECT_ALL = """
             SELECT trade_id, product_id, product_title, price, buyer_id, seller_id, status,
-                   payment_id, transfer_url, chat_room_id, cancel_reason, canceled_by, created_at, updated_at
+                   payment_id, chat_room_id, cancel_reason, canceled_by, created_at, updated_at
               FROM trades""";
 
     private static final RowMapper<Trade> MAPPER = (rs, rowNum) -> new Trade(
@@ -40,7 +40,6 @@ public class TradeRepository {
             rs.getLong("seller_id"),
             TradeStatus.valueOf(rs.getString("status")),
             rs.getObject("payment_id", Long.class),
-            rs.getString("transfer_url"),
             rs.getObject("chat_room_id", Long.class),
             rs.getString("cancel_reason"),
             rs.getObject("canceled_by", Long.class),
@@ -113,13 +112,12 @@ public class TradeRepository {
         return jdbc.sql(sql.toString()).params(params).query(MAPPER).list();
     }
 
-    /** Payment가 만든 송금 요청을 거래에 붙인다 */
-    public int attachPayment(long tradeId, long paymentId, String transferUrl) {
+    /** Payment가 만든 결제 요청서를 거래에 붙인다 */
+    public int attachPayment(long tradeId, long paymentId) {
         return jdbc.sql("""
-                        UPDATE trades SET payment_id = :paymentId, transfer_url = :transferUrl
+                        UPDATE trades SET payment_id = :paymentId
                          WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'""")
                 .param("paymentId", paymentId)
-                .param("transferUrl", transferUrl)
                 .param("id", tradeId)
                 .update();
     }

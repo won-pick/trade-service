@@ -8,10 +8,10 @@ import org.junit.jupiter.api.Test;
 class TradeStatusTest {
 
     @Test
-    void 입금_확인은_PAYMENT_REQUESTED에서만() {
-        assertThat(TradeStatus.PAYMENT_REQUESTED.canConfirmPayment()).isTrue();
-        assertThat(TradeStatus.PAID.canConfirmPayment()).isFalse();
-        assertThat(TradeStatus.CANCELED.canConfirmPayment()).isFalse();
+    void 결제는_PAYMENT_REQUESTED에서만() {
+        assertThat(TradeStatus.PAYMENT_REQUESTED.canPay()).isTrue();
+        assertThat(TradeStatus.PAID.canPay()).isFalse();
+        assertThat(TradeStatus.CANCELED.canPay()).isFalse();
     }
 
     @Test
@@ -21,7 +21,7 @@ class TradeStatusTest {
     }
 
     @Test
-    void 입금_확인_뒤에는_취소할_수_없다() {
+    void 결제_뒤에는_취소할_수_없다() {
         assertThat(TradeStatus.PAYMENT_REQUESTED.isCancelable()).isTrue();
         assertThat(TradeStatus.PAID.isCancelable()).isFalse();
         assertThat(TradeStatus.COMPLETED.isCancelable()).isFalse();
@@ -31,7 +31,7 @@ class TradeStatusTest {
     @Test
     void 판매자와_구매자_역할() {
         Trade trade = new Trade(1L, 7L, "아이패드", 250_000, 3L, 8L, TradeStatus.PAYMENT_REQUESTED,
-                null, null, 5L, null, null, null, null);
+                null, 5L, null, null, null, null);
         assertThat(trade.roleOf(3)).isEqualTo(TradeRole.BUYER);
         assertThat(trade.roleOf(8)).isEqualTo(TradeRole.SELLER);
         assertThat(trade.roleOf(99)).isNull();

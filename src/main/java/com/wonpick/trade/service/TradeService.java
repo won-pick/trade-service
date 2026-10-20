@@ -14,7 +14,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.wonpick.trade.client.MarketClient;
 import com.wonpick.trade.client.MarketClient.MarketProduct;
 import com.wonpick.trade.client.PaymentClient;
-import com.wonpick.trade.client.PaymentClient.PaymentResponse;
 import com.wonpick.trade.domain.Trade;
 import com.wonpick.trade.domain.TradeRole;
 import com.wonpick.trade.domain.TradeStatus;
@@ -24,8 +23,8 @@ import com.wonpick.trade.repository.IdempotencyKeyRepository;
 import com.wonpick.trade.repository.TradeRepository;
 
 /**
- * 거래 흐름의 조율자. 송금 요청(판매자, 거래 생성) → 입금 확인(판매자) → 구매 확정(구매자) / 취소.
- * 문의·대화는 Chat 서버의 채팅방이 맡는다. 판매자가 채팅방에서 "송금 요청"을 누르면 화면이 Trade를 직접 부른다.
+ * 거래 흐름의 조율자. 결제 요청(판매자, 거래 생성) → 결제(구매자, 잔액 이동) → 구매 확정(구매자) / 취소.
+ * 문의·대화는 Chat 서버의 채팅방이 맡는다. 판매자가 채팅방에서 "결제 요청"을 누르면 화면이 Trade를 직접 부른다.
  *
  * 원칙
  *  - 다른 서버 호출은 DB 트랜잭션 밖에서 한다 (느린 호출이 커넥션을 붙잡지 않게).
@@ -116,16 +115,16 @@ public class TradeService {
             throw e;
         }
 
-        // 4) Payment 송금 요청 생성. 실패하면 3)·2)를 거꾸로 되돌린다 (보상)
-        PaymentResponse created;
+        // 4) Payment 결제 요청서 생성. 실패하면 3)·2)를 거꾸로 되돌린다 (보상)
+        long paymentId;
         try {
-            created = payment.requestTransfer(trade);
+            paymentId = payment.createOrder(trade);
         } catch (TradeException e) {
             releaseQuietly(trade);
-            cancelAfterFailure(trade, sellerId, "송금 요청 생성 실패");
+            cancelAfterFailure(trade, sellerId, "결제 요청 생성 실패");
             throw e;
         }
-        trades.attachPayment(trade.tradeId(), created.paymentId(), created.transferUrl());
+        trades.attachPayment(trade.tradeId(), paymentId);
         return new CreateResult(getTrade(trade.tradeId()), true);
     }
 
@@ -141,30 +140,21 @@ public class TradeService {
         return trades.findByViewer(memberId, role, status, productId, chatRoomId);
     }
 
-    // ───────────── ② 입금 확인 (판매자) ─────────────
+    // ───────────── ② 결제 (구매자, 잔액 이동) ─────────────
 
-    public Trade confirmPayment(long tradeId, long memberId) {
+    public Trade pay(long tradeId, long memberId) {
         Trade trade = getTrade(tradeId);
-        requireRole(trade, memberId, TradeRole.SELLER, "입금 확인은 판매자만 할 수 있습니다.");
+        requireRole(trade, memberId, TradeRole.BUYER, "결제는 구매자만 할 수 있습니다.");
         if (trade.status() == TradeStatus.PAID) {
             return trade;
         }
-        if (!trade.status().canConfirmPayment() || trade.paymentId() == null) {
-            throw invalidStatus(trade, "입금 확인");
+        if (!trade.status().canPay() || trade.paymentId() == null) {
+            throw invalidStatus(trade, "결제");
         }
 
-        payment.approve(trade.paymentId());
-
-        Integer updated = tx.execute(status -> {
-            int n = trades.toPaid(tradeId);
-            if (n == 1) {
-                trades.insertHistory(tradeId, TradeStatus.PAYMENT_REQUESTED, TradeStatus.PAID, memberId);
-            }
-            return n;
-        });
-        if (updated == null || updated == 0) {
-            return currentOrConflict(tradeId, TradeStatus.PAID, "입금 확인");
-        }
+        // 잔액 이동. 실패하면 거래는 PAYMENT_REQUESTED로 남는다 → 같은 멱등 키라 다시 눌러도 안전
+        payment.pay(trade.paymentId(), memberId, tradeId);
+        markPaid(tradeId, memberId);
         return getTrade(tradeId);
     }
 
@@ -196,7 +186,7 @@ public class TradeService {
         return getTrade(tradeId);
     }
 
-    // ───────────── 취소 (구매자·판매자, 입금 확인 전까지) ─────────────
+    // ───────────── 취소 (구매자·판매자, 결제 전까지) ─────────────
 
     public Trade cancel(long tradeId, long memberId, String reason) {
         Trade trade = getTrade(tradeId);
@@ -206,13 +196,16 @@ public class TradeService {
         }
         if (!trade.status().isCancelable()) {
             throw new TradeException(ErrorCode.INVALID_STATUS,
-                    trade.status() + " 상태의 거래는 취소할 수 없습니다. 입금이 확인된 뒤에는 취소할 수 없어요.");
+                    trade.status() + " 상태의 거래는 취소할 수 없습니다. 결제가 끝난 뒤에는 취소할 수 없어요.");
         }
 
-        // Payment 송금 요청 취소 + Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
-        if (trade.paymentId() != null) {
-            payment.cancel(trade.paymentId());
+        // Payment에는 환불·취소 API가 없다. 잔액이 이미 옮겨졌는데 Trade가 응답을 못 받았던 경우를 걸러,
+        // 돈은 빠졌는데 거래는 취소되는 일을 막는다
+        if (trade.paymentId() != null && PaymentClient.COMPLETED.equals(payment.getStatus(trade.paymentId()))) {
+            markPaid(tradeId, trade.buyerId());
+            throw new TradeException(ErrorCode.INVALID_STATUS, "이미 결제가 끝난 거래라 취소할 수 없습니다.");
         }
+        // Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
         market.release(trade.productId(), tradeId);
 
         Integer updated = tx.execute(status -> {
@@ -230,6 +223,20 @@ public class TradeService {
     }
 
     // ───────────── 공통 ─────────────
+
+    /** PAYMENT_REQUESTED → PAID. 이미 PAID면 그대로, 다른 상태로 바뀌어 있으면 409 */
+    private void markPaid(long tradeId, long changedBy) {
+        Integer updated = tx.execute(status -> {
+            int n = trades.toPaid(tradeId);
+            if (n == 1) {
+                trades.insertHistory(tradeId, TradeStatus.PAYMENT_REQUESTED, TradeStatus.PAID, changedBy);
+            }
+            return n;
+        });
+        if (updated == null || updated == 0) {
+            currentOrConflict(tradeId, TradeStatus.PAID, "결제");
+        }
+    }
 
     /** 송금 요청 도중 다른 서버가 실패했을 때 — 만들어 둔 거래를 취소로 남기고 상품 차지를 푼다 */
     private void cancelAfterFailure(Trade trade, long sellerId, String reason) {

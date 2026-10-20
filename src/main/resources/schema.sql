@@ -12,8 +12,7 @@ CREATE TABLE IF NOT EXISTS trades (
   seller_id         BIGINT       NOT NULL,
   status            VARCHAR(20)  NOT NULL,          -- PAYMENT_REQUESTED / PAID / COMPLETED / CANCELED
   chat_room_id      BIGINT       NULL,              -- 송금 요청을 보낸 채팅방 (Chat 서버)
-  payment_id        BIGINT       NULL,
-  transfer_url      VARCHAR(500) NULL,              -- 판매자 카카오페이 송금 링크 (Payment가 내려줌)
+  payment_id        BIGINT       NULL,              -- Payment 결제 요청서 번호 (POST /orders 의 orderId)
   active_product_id BIGINT       NULL,              -- PAYMENT_REQUESTED·PAID일 때만 product_id, 끝나면 NULL
   cancel_reason     VARCHAR(200) NULL,
   canceled_by       BIGINT       NULL,

@@ -17,12 +17,12 @@ import com.wonpick.trade.dto.TradeResponse;
 /**
  * HATEOAS — 거래 상태 × 보는 사람(구매자/판매자)에 따라 "지금 할 수 있는 일"을 링크로 담는다.
  *
- * | 상태              | 구매자                                          | 판매자                                                  |
- * |-------------------|-------------------------------------------------|---------------------------------------------------------|
- * | PAYMENT_REQUESTED | self, product, chat, payment, transfer, cancel  | self, product, chat, payment, confirm-payment, cancel   |
- * | PAID            | self, product, chat, payment, complete          | self, product, chat, payment                            |
- * | COMPLETED       | self, product, payment                          | self, product, payment                                  |
- * | CANCELED        | self, product                                   | self, product                                           |
+ * | 상태              | 구매자                                     | 판매자                               |
+ * |-------------------|--------------------------------------------|--------------------------------------|
+ * | PAYMENT_REQUESTED | self, product, chat, payment, pay, cancel  | self, product, chat, payment, cancel |
+ * | PAID              | self, product, chat, payment, complete     | self, product, chat, payment         |
+ * | COMPLETED         | self, product, payment                     | self, product, payment               |
+ * | CANCELED          | self, product                              | self, product                        |
  *
  * React는 링크가 있으면 버튼을 보여 줄 뿐, 상태나 역할로 판단하지 않는다.
  */
@@ -77,11 +77,8 @@ public class TradeLinkAssembler {
         }
 
         // 다음 행동 — 상태 전이 규칙(TradeStatus)과 같은 메서드로 정한다
-        if (buyer && status == TradeStatus.PAYMENT_REQUESTED && trade.transferUrl() != null) {
-            links.put("transfer", new Link(trade.transferUrl()));   // 외부(카카오페이) 송금 링크
-        }
-        if (seller && status.canConfirmPayment()) {
-            links.put("confirm-payment", new Link(self + "/confirm-payment"));
+        if (buyer && status.canPay() && trade.paymentId() != null) {
+            links.put("pay", new Link(self + "/pay"));
         }
         if (buyer && status.canComplete()) {
             links.put("complete", new Link(self + "/complete"));

@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -36,7 +35,7 @@ public class StubUpstreamController {
 
     private final Map<Long, String> productStatus = new ConcurrentHashMap<>();
     private final Map<Long, Object> reservedBy = new ConcurrentHashMap<>();
-    private final Map<String, Map<String, Object>> paymentsByKey = new ConcurrentHashMap<>();
+    private final Map<Long, String> paymentStatus = new ConcurrentHashMap<>();
     private final AtomicLong paymentSequence = new AtomicLong();
 
     // ── Market (market-service 의 상품·예약 계약과 같은 모양) ──
@@ -79,27 +78,32 @@ public class StubUpstreamController {
         return Map.of("productId", id, "tradeId", request.get("tradeId"), "status", "SOLD");
     }
 
-    // ── Payment ──
+    // ── Payment (payment-service 의 주문·결제 계약과 같은 모양. 잔액은 항상 충분하다고 본다) ──
 
-    @PostMapping("/payment/payments")
+    @PostMapping("/payment/orders")
     @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createPayment(
-            @RequestHeader(value = "Idempotency-Key", required = false) String key,
-            @RequestBody Map<String, Object> request) {
-        String safeKey = key == null ? "no-key-" + paymentSequence.get() : key;
-        return paymentsByKey.computeIfAbsent(safeKey, k -> Map.of(
-                "paymentId", paymentSequence.incrementAndGet(),
-                "status", "READY",
-                "transferUrl", "https://qr.kakaopay.com/stub-seller-link"));
+    public Map<String, Object> createOrder(@RequestBody Map<String, Object> request) {
+        long id = paymentSequence.incrementAndGet();
+        paymentStatus.put(id, "PENDING");
+        return Map.of("orderId", id, "sellerId", request.get("sellerId"), "amount", request.get("amount"),
+                "status", "PENDING");
     }
 
-    @PostMapping("/payment/payments/{id}/approve")
-    public Map<String, Object> approve(@PathVariable("id") long id) {
-        return Map.of("paymentId", id, "status", "APPROVED");
+    @PostMapping("/payment/orders/{id}/payments")
+    public Map<String, Object> pay(@PathVariable("id") long id, @RequestBody Map<String, Object> request) {
+        if (!paymentStatus.containsKey(id)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 요청서를 찾을 수 없습니다.");
+        }
+        paymentStatus.put(id, "COMPLETED");
+        return Map.of("paymentId", id, "buyerId", request.get("buyerId"), "status", "COMPLETED");
     }
 
-    @PostMapping("/payment/payments/{id}/cancel")
-    public Map<String, Object> cancel(@PathVariable("id") long id) {
-        return Map.of("paymentId", id, "status", "CANCELED");
+    @GetMapping("/payment/payments/{id}")
+    public Map<String, Object> payment(@PathVariable("id") long id) {
+        String status = paymentStatus.get(id);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 내역을 찾을 수 없습니다.");
+        }
+        return Map.of("paymentId", id, "status", status);
     }
 }

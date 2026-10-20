@@ -1,0 +1,38 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.0.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.wonpick'
+version = '0.0.1-SNAPSHOT'
+description = 'WON-pick Trade 서버 (거래 관리)'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // REST API (Spring MVC + 내장 Tomcat + Jackson). Spring Boot 4에서 starter-web의 새 이름
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    // 입력 검증 (@Valid, @NotNull, @Positive ...)
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // JDBC (JdbcClient, 트랜잭션, HikariCP 커넥션 풀)
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    // Swagger UI (springdoc-openapi 3.x = Spring Boot 4용)
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.0'
+
+    // MySQL 드라이버
+    runtimeOnly 'com.mysql:mysql-connector-j'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

@@ -1,0 +1,32 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: trade-service
+  datasource:
+    # trade_db 스키마가 없으면 MySQL이 만들어 준다 (createDatabaseIfNotExist)
+    url: jdbc:mysql://localhost:3306/trade_db?createDatabaseIfNotExist=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:1234}
+  sql:
+    init:
+      mode: always          # 시작할 때 schema.sql 실행 (CREATE TABLE IF NOT EXISTS)
+
+# 다른 서버 주소 — 아직 완성 전이면 Apidog Mock 주소로 바꿔서 개발한다
+servers:
+  market:
+    base-url: http://localhost:8081
+  chat:
+    base-url: http://localhost:8082
+  payment:
+    base-url: http://localhost:8084
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
+logging:
+  level:
+    com.wonpick.trade: INFO

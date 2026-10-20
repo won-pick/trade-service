@@ -1,0 +1,76 @@
+### WON-pick Trade 서버 전체 흐름 (IntelliJ HTTP Client로 위에서부터 차례로 실행)
+### stub 프로필로 실행하면 다른 서버 없이 돌아간다. 가짜 상품의 판매자는 100번, 구매자는 3번·4번으로 한다.
+
+### 1. 구매자 3번이 7번 상품에 구매 문의 → 201, _links 에 cancel 만 (송금 요청은 판매자 몫)
+POST http://localhost:8083/trades
+Content-Type: application/json
+X-Member-Id: 3
+Idempotency-Key: 6f1c2a90-0000-4000-8000-000000000001
+
+{ "productId": 7 }
+
+> {% client.global.set("tradeId", response.body.tradeId); %}
+
+### 2. 같은 키로 재시도 → 같은 거래가 돌아온다 (두 건 생기지 않음)
+POST http://localhost:8083/trades
+Content-Type: application/json
+X-Member-Id: 3
+Idempotency-Key: 6f1c2a90-0000-4000-8000-000000000001
+
+{ "productId": 7 }
+
+### 3. 다른 구매자 4번도 같은 상품에 문의 가능 (당근마켓 방식)
+POST http://localhost:8083/trades
+Content-Type: application/json
+X-Member-Id: 4
+
+{ "productId": 7 }
+
+### 4. 판매자 100번이 7번 상품 문의 목록 확인
+GET http://localhost:8083/trades?role=SELLER&productId=7
+X-Member-Id: 100
+
+### 5. 구매자가 송금 요청을 보내려 하면 → 403 ROLE_NOT_ALLOWED
+POST http://localhost:8083/trades/{{tradeId}}/request-payment
+X-Member-Id: 3
+
+### 6. 판매자가 구매자 3번에게 송금 요청 → PAYMENT_PENDING, 판매자 _links 에 confirm-payment
+POST http://localhost:8083/trades/{{tradeId}}/request-payment
+X-Member-Id: 100
+
+### 7. 구매자 화면 → _links.transfer (카카오페이 송금 링크)
+GET http://localhost:8083/trades/{{tradeId}}
+X-Member-Id: 3
+
+### 8. 판매자 입금 확인 → PAID
+POST http://localhost:8083/trades/{{tradeId}}/confirm-payment
+X-Member-Id: 100
+
+### 9. PAID 거래 취소 시도 → 409 INVALID_STATUS
+POST http://localhost:8083/trades/{{tradeId}}/cancel
+Content-Type: application/json
+X-Member-Id: 3
+
+{ "reason": "마음이 바뀌었어요" }
+
+### 10. 구매자 구매 확정 → COMPLETED, 구매자 4번의 문의는 자동 CANCELED
+POST http://localhost:8083/trades/{{tradeId}}/complete
+X-Member-Id: 3
+
+### 11. 한 번 더 확정 → 200 (멱등, 상태 그대로)
+POST http://localhost:8083/trades/{{tradeId}}/complete
+X-Member-Id: 3
+
+### 12. 구매자 4번의 거래 목록 → CANCELED
+GET http://localhost:8083/trades?role=BUYER
+X-Member-Id: 4
+
+### 13. 입력 오류 → 400 INVALID_INPUT + errors
+POST http://localhost:8083/trades
+Content-Type: application/json
+X-Member-Id: 3
+
+{ "productId": -1 }
+
+### 14. 헤더 누락 → 400 INVALID_INPUT
+GET http://localhost:8083/trades/1

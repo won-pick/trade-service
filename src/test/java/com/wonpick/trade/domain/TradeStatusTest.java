@@ -1,0 +1,46 @@
+package com.wonpick.trade.domain;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+/** 상태 전이표가 코드와 같은지 확인한다 (DB·다른 서버 없이 실행) */
+class TradeStatusTest {
+
+    @Test
+    void 송금_요청은_REQUESTED에서만() {
+        assertThat(TradeStatus.REQUESTED.canRequestPayment()).isTrue();
+        assertThat(TradeStatus.PAYMENT_PENDING.canRequestPayment()).isFalse();
+        assertThat(TradeStatus.PAID.canRequestPayment()).isFalse();
+    }
+
+    @Test
+    void 입금_확인은_PAYMENT_PENDING에서만() {
+        assertThat(TradeStatus.PAYMENT_PENDING.canConfirmPayment()).isTrue();
+        assertThat(TradeStatus.REQUESTED.canConfirmPayment()).isFalse();
+    }
+
+    @Test
+    void 구매_확정은_PAID에서만() {
+        assertThat(TradeStatus.PAID.canComplete()).isTrue();
+        assertThat(TradeStatus.PAYMENT_PENDING.canComplete()).isFalse();
+    }
+
+    @Test
+    void 입금_확인_뒤에는_취소할_수_없다() {
+        assertThat(TradeStatus.REQUESTED.isCancelable()).isTrue();
+        assertThat(TradeStatus.PAYMENT_PENDING.isCancelable()).isTrue();
+        assertThat(TradeStatus.PAID.isCancelable()).isFalse();
+        assertThat(TradeStatus.COMPLETED.isCancelable()).isFalse();
+        assertThat(TradeStatus.CANCELED.isCancelable()).isFalse();
+    }
+
+    @Test
+    void 판매자와_구매자_역할() {
+        Trade trade = new Trade(1L, 7L, "아이패드", 250_000, 3L, 8L, TradeStatus.REQUESTED,
+                null, null, null, null, null, null, null);
+        assertThat(trade.roleOf(3)).isEqualTo(TradeRole.BUYER);
+        assertThat(trade.roleOf(8)).isEqualTo(TradeRole.SELLER);
+        assertThat(trade.roleOf(99)).isNull();
+    }
+}

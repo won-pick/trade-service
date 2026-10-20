@@ -140,7 +140,7 @@ public class TradeRepository {
         return jdbc.sql("""
                         UPDATE trades SET status = 'CANCELED', active_product_id = NULL,
                                           cancel_reason = :reason, canceled_by = :canceledBy
-                         WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'""")
+                         WHERE trade_id = :id AND status IN ('PAYMENT_REQUESTED', 'PAID')""")
                 .param("reason", reason)
                 .param("canceledBy", canceledBy)
                 .param("id", tradeId)

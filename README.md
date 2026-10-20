@@ -34,14 +34,15 @@
 | --- | --- | --- | --- | --- |
 | (없음) | 결제 요청 `POST /trades` | 판매자 | PAYMENT_REQUESTED | Market 상품 확인·예약(RESERVED), Payment 주문 생성(PENDING). 진행 중인 거래가 있는 상품이면 409 |
 | PAYMENT_REQUESTED | `POST /trades/{id}/pay` | 구매자 | PAID | Payment 잔액 이동 (구매자 → 판매자). 잔액 부족·계좌 없음이면 422, 상태 그대로 |
-| PAYMENT_REQUESTED | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | Market 예약 해제(ON_SALE) |
+| PAYMENT_REQUESTED | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | Payment 주문 취소(CANCELED), Market 예약 해제(ON_SALE) |
 | PAID | `POST /trades/{id}/complete` | 구매자 | COMPLETED | Market 판매 완료(SOLD) |
+| PAID | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | Payment 환불(REFUNDED, 판매자 → 구매자), Market 예약 해제(ON_SALE) |
 | COMPLETED · CANCELED | 없음 | — | (끝) | 다른 상태로 가는 요청 409, 같은 요청 재전송 200 |
 
-- 결제(PAID) 뒤에는 취소할 수 없습니다. Payment에 환불 API가 없어 잔액을 되돌릴 수 없기 때문입니다.
+- 구매 확정(COMPLETED) 전까지는 취소할 수 있습니다. 이미 결제했다면 Payment가 잔액을 구매자에게 돌려줍니다.
 - 결제 요청 도중 Market 예약이나 Payment 주문 생성이 실패하면, 앞에서 한 일을 거꾸로 되돌리고 거래를 CANCELED(사유: 실패 단계)로 남깁니다.
 - 결제의 멱등 키는 `trade-{거래번호}-pay`로 고정입니다. 응답을 못 받고 다시 눌러도 잔액은 한 번만 빠집니다.
-- 취소하기 전에 Payment 결제 상태를 확인해, 이미 잔액이 옮겨졌으면 PAID로 맞추고 409를 돌려줍니다.
+- 결제 대기 중에 취소했는데 Payment 주문이 이미 결제돼 있으면(응답 유실 등) 주문 취소 대신 환불로 처리합니다.
 
 ## API
 
@@ -62,7 +63,7 @@
 | 상태 | 구매자 | 판매자 |
 | --- | --- | --- |
 | PAYMENT_REQUESTED | self, product, chat, payment, pay, cancel | self, product, chat, payment, cancel |
-| PAID | self, product, chat, payment, complete | self, product, chat, payment |
+| PAID | self, product, chat, payment, complete, cancel | self, product, chat, payment, cancel |
 | COMPLETED | self, product, payment | self, product, payment |
 | CANCELED | self, product | self, product |
 
@@ -77,8 +78,9 @@
 | Market | `DELETE /products/{id}/reservation` | `{tradeId}` | 200 |
 | Market | `POST /products/{id}/complete` | `{tradeId}` | 200 |
 | Payment | `POST /orders` | `{sellerId, amount}` | 201 `{orderId, status: "PENDING"}` — orderId를 거래의 paymentId로 저장 |
-| Payment | `POST /orders/{paymentId}/payments` | `{buyerId, idempotencyKey}` | 200 `{status: "COMPLETED"}` (잔액 부족 400, 계좌 없음 404) |
-| Payment | `GET /payments/{paymentId}` | — | 200 `{status}` (PENDING / COMPLETED) |
+| Payment | `POST /orders/{paymentId}/payments` | `{buyerId, idempotencyKey}` | 200 `{status: "COMPLETED"}` (잔액 부족 400 → Trade 422). 계좌가 없으면 자동 개설 |
+| Payment | `POST /orders/{paymentId}/cancel` | — | 200 `{status: "CANCELED"}` (이미 결제됐으면 409 → 환불로 전환) |
+| Payment | `POST /payments/{paymentId}/refund` | — | 200 `{status: "REFUNDED"}` |
 
 ## DB 스키마 (trade_db)
 
@@ -99,12 +101,14 @@ MySQL 8(`root` / `1234`)과 Node.js 20 이상이 필요합니다.
 scripts\run-all.cmd            # 이 PC에서만 시연 → http://localhost:5173
 scripts\run-all.cmd -Pull      # 시작 전에 모든 저장소 git pull
 scripts\run-all.cmd -Share     # 강의장 다른 PC도 http://<내 IP>:5173 으로 접속
+scripts\run-all.cmd -SharedMarketDb   # Market DB로 팀 공용 DB(172.21.33.36) 사용
 scripts\stop-all.cmd           # 모두 끄기 (5173·8080·8082·8083·8084)
 ```
 
 - 서버마다 PowerShell 창이 하나씩 열립니다. 포트를 이미 쓰는 서버(IntelliJ에서 켠 서버 등)는 건너뜁니다.
 - 각 서버의 DB 주소·계정은 스크립트가 환경 변수로 넣습니다. 다른 저장소의 설정 파일은 고치지 않습니다.
-- Payment는 아직 테이블 생성·계좌 API가 없어서, `scripts/payment-local.sql`이 `payment_db` 테이블을 만들고 **회원 1~200번에게 1,000,000원짜리 가상 계좌**를 넣습니다.
+- Market은 기본으로 이 PC의 `wonpick_market`(자동 생성·초기 데이터)을 씁니다. `-SharedMarketDb`는 팀 공용 DB에 붙고, 접속이 안 되면 로컬로 돌아갑니다. 공용 DB에 `product_reservations` 테이블이 있어야 결제 요청(상품 예약)이 됩니다.
+- Payment는 `payment_db` 테이블을 스스로 만들고, 처음 결제하는 회원에게 **1,000,000원짜리 가상 계좌**를 자동으로 열어 줍니다. 잔액 조회 `GET /accounts/{회원번호}`, 충전 `POST /accounts/{회원번호}/charge`.
 - `-Share`는 내 IP를 찾아 화면·CORS 주소에 넣고 `npm run dev -- --host`로 띄웁니다. 방화벽(5173·8082·8083)은 관리자 권한이면 자동으로 열고, 아니면 명령을 안내합니다.
 
 ### Trade만 실행

@@ -8,8 +8,8 @@ package com.wonpick.trade.domain;
  *
  * <pre>
  * (결제 요청, 판매자) ──▶ PAYMENT_REQUESTED ──pay(구매자)──▶ PAID ──complete(구매자)──▶ COMPLETED
- *                              │
- *                              └── cancel(구매자·판매자) ──▶ CANCELED
+ *                              │                            │
+ *                              └──── cancel(구매자·판매자) ──┴──▶ CANCELED (PAID였으면 환불)
  * </pre>
  *
  * HATEOAS 링크도 이 메서드들로 정한다. 그래야 "버튼은 보이는데 누르면 409"가 생기지 않는다.
@@ -28,9 +28,9 @@ public enum TradeStatus {
         return this == PAID;
     }
 
-    /** 결제(PAID) 전까지만 취소할 수 있다. Payment에 환불 API가 없어 잔액을 되돌릴 수 없기 때문. */
+    /** 구매 확정 전까지 취소할 수 있다. 결제(PAID) 뒤의 취소는 Payment 환불로 잔액을 되돌린다. */
     public boolean isCancelable() {
-        return this == PAYMENT_REQUESTED;
+        return this == PAYMENT_REQUESTED || this == PAID;
     }
 
     public boolean isFinished() {

@@ -186,7 +186,7 @@ public class TradeService {
         return getTrade(tradeId);
     }
 
-    // ───────────── 취소 (구매자·판매자, 결제 전까지) ─────────────
+    // ───────────── 취소 (구매자·판매자, 구매 확정 전까지) ─────────────
 
     public Trade cancel(long tradeId, long memberId, String reason) {
         Trade trade = getTrade(tradeId);
@@ -196,22 +196,26 @@ public class TradeService {
         }
         if (!trade.status().isCancelable()) {
             throw new TradeException(ErrorCode.INVALID_STATUS,
-                    trade.status() + " 상태의 거래는 취소할 수 없습니다. 결제가 끝난 뒤에는 취소할 수 없어요.");
+                    trade.status() + " 상태의 거래는 취소할 수 없습니다. 구매 확정 뒤에는 취소할 수 없어요.");
         }
 
-        // Payment에는 환불·취소 API가 없다. 잔액이 이미 옮겨졌는데 Trade가 응답을 못 받았던 경우를 걸러,
-        // 돈은 빠졌는데 거래는 취소되는 일을 막는다
-        if (trade.paymentId() != null && PaymentClient.COMPLETED.equals(payment.getStatus(trade.paymentId()))) {
-            markPaid(tradeId, trade.buyerId());
-            throw new TradeException(ErrorCode.INVALID_STATUS, "이미 결제가 끝난 거래라 취소할 수 없습니다.");
+        // 1) Payment 정리. 결제 전이면 결제 요청서 취소 — 그 뒤로는 구매자가 결제할 수 없다.
+        //    그 사이 결제가 끝났으면(취소가 409) 환불로 잔액을 되돌린다. 실패하면 거래는 그대로 (다시 눌러도 안전)
+        if (trade.paymentId() != null) {
+            boolean canceledBeforePay = trade.status() == TradeStatus.PAYMENT_REQUESTED
+                    && payment.cancelOrder(trade.paymentId());
+            if (!canceledBeforePay) {
+                payment.refund(trade.paymentId());
+            }
         }
-        // Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
+        // 2) Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
         market.release(trade.productId(), tradeId);
 
+        TradeStatus from = trade.status();
         Integer updated = tx.execute(status -> {
             int n = trades.toCanceled(tradeId, reason, memberId);
             if (n == 1) {
-                trades.insertHistory(tradeId, TradeStatus.PAYMENT_REQUESTED, TradeStatus.CANCELED, memberId);
+                trades.insertHistory(tradeId, from, TradeStatus.CANCELED, memberId);
             }
             return n;
         });

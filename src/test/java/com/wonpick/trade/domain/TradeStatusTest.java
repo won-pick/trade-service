@@ -21,9 +21,9 @@ class TradeStatusTest {
     }
 
     @Test
-    void 결제_뒤에는_취소할_수_없다() {
+    void 구매_확정_전까지_취소할_수_있다() {
         assertThat(TradeStatus.PAYMENT_REQUESTED.isCancelable()).isTrue();
-        assertThat(TradeStatus.PAID.isCancelable()).isFalse();
+        assertThat(TradeStatus.PAID.isCancelable()).isTrue();
         assertThat(TradeStatus.COMPLETED.isCancelable()).isFalse();
         assertThat(TradeStatus.CANCELED.isCancelable()).isFalse();
     }

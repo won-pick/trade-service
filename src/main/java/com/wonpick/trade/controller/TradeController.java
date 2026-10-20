@@ -111,7 +111,9 @@ public class TradeController {
         return assembler.toResponse(tradeService.complete(tradeId, memberId), memberId);
     }
 
-    @Operation(summary = "거래 취소 (구매자·판매자)", description = "결제(PAID) 전까지만 취소할 수 있다. Market 예약 해제.")
+    @Operation(summary = "거래 취소 (구매자·판매자)",
+            description = "구매 확정 전까지 취소할 수 있다. 결제 전이면 Payment 결제 요청 취소, 결제 후면 Payment 환불. "
+                    + "그다음 Market 예약 해제.")
     @PostMapping("/{tradeId}/cancel")
     public TradeResponse cancel(
             @RequestHeader(MEMBER_HEADER) @Positive long memberId,

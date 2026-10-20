@@ -1,15 +1,21 @@
 ﻿# WON-pick 전체(Market·Chat·Trade·Payment·Web)를 이 PC 한 대에서 띄운다. 서버마다 PowerShell 창이 하나씩 열린다.
 #
-#   scripts\run-all.cmd                 이 PC 브라우저에서만 시연 (http://localhost:5173)
-#   scripts\run-all.cmd -Share          강의장 다른 PC도 http://<내 IP>:5173 으로 접속
-#   scripts\run-all.cmd -Pull           시작 전에 모든 저장소 git pull
+#   scripts\run-all.cmd                   이 PC 브라우저에서만 시연 (http://localhost:5173), DB는 모두 이 PC의 MySQL
+#   scripts\run-all.cmd -Share            강의장 다른 PC도 http://<내 IP>:5173 으로 접속
+#   scripts\run-all.cmd -SharedMarketDb   Market만 팀 공유 DB(172.21.33.36 wonpick_market)에 붙는다
+#   scripts\run-all.cmd -Pull             시작 전에 모든 저장소 git pull
 #
 # 저장소 5개가 같은 폴더(trade-service의 부모 폴더) 안에 있어야 한다. 없으면 clone 한다.
+# DB·테이블은 각 서버가 스스로 만든다 (createDatabaseIfNotExist + schema.sql).
 param(
     [switch]$Share,
     [switch]$Pull,
+    [switch]$SharedMarketDb,
     [string]$DbUser = 'root',
-    [string]$DbPassword = '1234'
+    [string]$DbPassword = '1234',
+    [string]$SharedMarketHost = '172.21.33.36',
+    [string]$SharedMarketUser = 'wonpick_team',
+    [string]$SharedMarketPassword = '1234'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,21 +35,14 @@ foreach ($repo in $repos) {
     }
 }
 
-# ── MySQL: Payment 테이블·테스트 계좌 (다른 서버는 스스로 DB·테이블을 만든다) ──
-$mysql = (Get-Command mysql -ErrorAction SilentlyContinue).Source
-if (-not $mysql) {
-    $mysql = Get-ChildItem 'C:\Program Files\MySQL' -Recurse -Filter mysql.exe -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty FullName
+function Test-Port([string]$hostName, [int]$port) {
+    $client = New-Object Net.Sockets.TcpClient
+    try { return $client.ConnectAsync($hostName, $port).Wait(3000) } catch { return $false } finally { $client.Close() }
 }
-if (-not $mysql) {
-    throw 'mysql.exe 를 찾지 못했습니다. MySQL 8 이 설치되어 있고 실행 중인지 확인하세요.'
+
+if (-not (Test-Port 'localhost' 3306)) {
+    throw '이 PC의 MySQL(3306)에 연결할 수 없습니다. MySQL 서비스를 켜고 다시 실행하세요.'
 }
-$sql = (Join-Path $PSScriptRoot 'payment-local.sql') -replace '\\', '/'
-$env:MYSQL_PWD = $DbPassword
-& $mysql "-u$DbUser" -e "source $sql"
-if ($LASTEXITCODE -ne 0) { throw 'Payment DB 준비 실패. MySQL 이 켜져 있는지, 계정·비밀번호가 맞는지 확인하세요.' }
-Remove-Item Env:MYSQL_PWD
-Write-Host 'MySQL 준비 완료 (payment_db 계좌: 회원 1~200번, 잔액 1,000,000원)' -ForegroundColor Green
 
 # ── 주소 ──
 $ip = 'localhost'
@@ -57,7 +56,29 @@ if ($Share) {
 $origins = 'http://localhost:5173'
 if ($Share) { $origins += ",http://${ip}:5173" }
 
-$jdbcOpts = 'createDatabaseIfNotExist=true&serverTimezone=Asia/Seoul&characterEncoding=UTF-8'
+$jdbcOpts = 'serverTimezone=Asia/Seoul&characterEncoding=UTF-8'
+$localJdbc = "createDatabaseIfNotExist=true&$jdbcOpts"
+
+# ── Market DB: 기본은 이 PC, -SharedMarketDb 면 팀 공유 DB ──
+$marketEnv = @{
+    MARKET_DB_URL = "jdbc:mysql://localhost:3306/wonpick_market?$localJdbc"
+    MARKET_DB_USERNAME = $DbUser; MARKET_DB_PASSWORD = $DbPassword
+    SPRING_SQL_INIT_MODE = 'always'          # 로컬 DB는 Market의 schema.sql로 테이블을 만든다
+    TRADE_BASE_URL = "http://${ip}:8083"; MARKET_CORS_ALLOWED_ORIGINS = $origins
+}
+if ($SharedMarketDb) {
+    if (Test-Port $SharedMarketHost 3306) {
+        $marketEnv.MARKET_DB_URL = "jdbc:mysql://${SharedMarketHost}:3306/wonpick_market?$jdbcOpts"
+        $marketEnv.MARKET_DB_USERNAME = $SharedMarketUser
+        $marketEnv.MARKET_DB_PASSWORD = $SharedMarketPassword
+        $marketEnv.SPRING_SQL_INIT_MODE = 'never'   # 공유 DB 테이블은 Market 담당자가 관리한다
+        Write-Host "Market DB: 공유 DB ${SharedMarketHost}:3306/wonpick_market" -ForegroundColor Green
+    } else {
+        Write-Host "공유 Market DB(${SharedMarketHost}:3306)에 연결할 수 없어 이 PC의 MySQL을 씁니다." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host 'Market DB: 이 PC의 MySQL wonpick_market' -ForegroundColor Green
+}
 
 # ── 창 하나에 서버 하나 ──
 function Start-Window([string]$title, [string]$dir, [int]$port, [hashtable]$envs, [string]$command) {
@@ -73,21 +94,16 @@ function Start-Window([string]$title, [string]$dir, [int]$port, [hashtable]$envs
     Write-Host "  [$title] http://localhost:$port 시작"
 }
 
-Start-Window 'Market' (Join-Path $root 'market-service') 8082 @{
-    DB_URL = "jdbc:mysql://localhost:3306/wonpick_market?$jdbcOpts"; DB_USERNAME = $DbUser; DB_PASSWORD = $DbPassword
-    MARKET_DB_URL = "jdbc:mysql://localhost:3306/wonpick_market?$jdbcOpts"; MARKET_DB_USERNAME = $DbUser; MARKET_DB_PASSWORD = $DbPassword
-    TRADE_BASE_URL = "http://${ip}:8083"; ALLOWED_ORIGINS = $origins
-} '.\gradlew.bat bootRun'
+Start-Window 'Market' (Join-Path $root 'market-service') 8082 $marketEnv '.\gradlew.bat bootRun'
 
 Start-Window 'Chat' (Join-Path $root 'chat-service') 8080 @{
     SPRING_PROFILES_ACTIVE = 'mysql'
-    CHAT_DB_URL = "jdbc:mysql://localhost:3306/chat_db?$jdbcOpts"; CHAT_DB_USER = $DbUser; CHAT_DB_PASSWORD = $DbPassword
+    CHAT_DB_URL = "jdbc:mysql://localhost:3306/chat_db?$localJdbc"; CHAT_DB_USER = $DbUser; CHAT_DB_PASSWORD = $DbPassword
 } '.\gradlew.bat bootRun'
 
 Start-Window 'Payment' (Join-Path $root 'payment-service\payment') 8084 @{
-    SERVER_PORT = '8084'
-    SPRING_DATASOURCE_URL = "jdbc:mysql://localhost:3306/payment_db?$jdbcOpts"
-    SPRING_DATASOURCE_USERNAME = $DbUser; SPRING_DATASOURCE_PASSWORD = $DbPassword
+    PAYMENT_DB_URL = "jdbc:mysql://localhost:3306/payment_db?$localJdbc"
+    PAYMENT_DB_USERNAME = $DbUser; PAYMENT_DB_PASSWORD = $DbPassword
 } '.\gradlew.bat bootRun'
 
 Start-Window 'Trade' (Join-Path $root 'trade-service') 8083 @{
@@ -115,5 +131,6 @@ if ($Share) {
 
 Write-Host ''
 Write-Host '서버가 모두 뜨는 데 1~2분 걸립니다. 그다음 http://localhost:5173 을 여세요.' -ForegroundColor Cyan
+Write-Host '가상 잔액: 처음 결제에 참여하는 회원은 1,000,000원 계좌가 자동으로 열립니다 (Payment).'
 Write-Host 'Swagger: Market :8082 / Chat :8080 / Trade :8083 / Payment :8084  (각 /swagger-ui.html)'
 Write-Host '끄기: scripts\stop-all.cmd'

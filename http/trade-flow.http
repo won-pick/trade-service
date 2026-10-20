@@ -46,7 +46,7 @@ X-Member-Id: 3
 POST http://localhost:8083/trades/{{tradeId}}/pay
 X-Member-Id: 3
 
-### 8. PAID 거래 취소 시도 → 409 INVALID_STATUS
+### 8. (선택) PAID 거래 취소 → 200 CANCELED + Payment 환불. 9번 이후를 보려면 건너뛴다
 POST http://localhost:8083/trades/{{tradeId}}/cancel
 Content-Type: application/json
 X-Member-Id: 3

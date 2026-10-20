@@ -20,7 +20,7 @@ import com.wonpick.trade.dto.TradeResponse;
  * | 상태              | 구매자                                     | 판매자                               |
  * |-------------------|--------------------------------------------|--------------------------------------|
  * | PAYMENT_REQUESTED | self, product, chat, payment, pay, cancel  | self, product, chat, payment, cancel |
- * | PAID              | self, product, chat, payment, complete     | self, product, chat, payment         |
+ * | PAID              | self, product, chat, payment, complete, cancel | self, product, chat, payment, cancel |
  * | COMPLETED         | self, product, payment                     | self, product, payment               |
  * | CANCELED          | self, product                              | self, product                        |
  *

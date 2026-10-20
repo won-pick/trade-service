@@ -94,15 +94,30 @@ public class StubUpstreamController {
         if (!paymentStatus.containsKey(id)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 요청서를 찾을 수 없습니다.");
         }
-        paymentStatus.put(id, "COMPLETED");
+        String status = paymentStatus.computeIfPresent(id, (k, now) -> "PENDING".equals(now) ? "COMPLETED" : now);
+        if (!"COMPLETED".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "취소되었거나 결제할 수 없는 상태입니다.");
+        }
         return Map.of("paymentId", id, "buyerId", request.get("buyerId"), "status", "COMPLETED");
     }
 
-    @GetMapping("/payment/payments/{id}")
-    public Map<String, Object> payment(@PathVariable("id") long id) {
-        String status = paymentStatus.get(id);
+    @PostMapping("/payment/orders/{id}/cancel")
+    public Map<String, Object> cancelOrder(@PathVariable("id") long id) {
+        String status = paymentStatus.computeIfPresent(id, (k, now) -> "PENDING".equals(now) ? "CANCELED" : now);
         if (status == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 내역을 찾을 수 없습니다.");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "결제 요청서를 찾을 수 없습니다.");
+        }
+        if (!"CANCELED".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "송금이 끝난 결제는 취소할 수 없습니다.");
+        }
+        return Map.of("paymentId", id, "status", status);
+    }
+
+    @PostMapping("/payment/payments/{id}/refund")
+    public Map<String, Object> refund(@PathVariable("id") long id) {
+        String status = paymentStatus.computeIfPresent(id, (k, now) -> "COMPLETED".equals(now) ? "REFUNDED" : now);
+        if (!"REFUNDED".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "송금이 끝난 결제만 환불할 수 있습니다.");
         }
         return Map.of("paymentId", id, "status", status);
     }

@@ -14,9 +14,9 @@
         └───────────────────────┘
           │          │          │
           ▼          ▼          ▼
-   Market (8081)  Payment (8084)  Chat (8082)
+   Market (8082)  Payment (8084)  Chat (8081, 미정)
    상품 조회·      송금 요청·       거래 채팅방·
-   판매완료        입금 승인·취소    시스템 메시지
+   예약·판매완료    입금 승인·취소    시스템 메시지
                      ┊
                      ▼
               카카오페이 송금 링크 (구매자가 앱에서 직접 송금)
@@ -24,8 +24,8 @@
 
 | 서버 | 포트 | DB 스키마 |
 | --- | --- | --- |
-| Market | 8081 | (Market 담당) |
-| Chat | 8082 | (Chat 담당) |
+| Market | 8082 | market_db |
+| Chat | 8081 (미정) | (Chat 담당) |
 | **Trade** | **8083** | **trade_db** |
 | Payment | 8084 | (Payment 담당) |
 
@@ -34,14 +34,17 @@
 | 지금 상태 | 행위 (주소) | 누가 | 다음 상태 | 함께 일어나는 일 |
 | --- | --- | --- | --- | --- |
 | (없음) | 구매 문의 `POST /trades` | 구매자 | REQUESTED | Market 상품 확인, Chat 채팅방 생성. 한 상품에 여러 구매자 가능 |
-| REQUESTED | `POST /trades/{id}/request-payment` | 판매자 | PAYMENT_PENDING | Payment 송금 요청 생성. 같은 상품에 송금 단계 거래가 있으면 409 |
+| REQUESTED | `POST /trades/{id}/request-payment` | 판매자 | PAYMENT_PENDING | Market 상품 예약(RESERVED) + Payment 송금 요청 생성. 이미 예약된 상품이면 409 |
 | REQUESTED | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | — |
 | PAYMENT_PENDING | `POST /trades/{id}/confirm-payment` | 판매자 | PAID | Payment 승인 |
-| PAYMENT_PENDING | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | Payment 취소 |
-| PAID | `POST /trades/{id}/complete` | 구매자 | COMPLETED | Market 판매완료, 같은 상품의 다른 문의 자동 취소 |
+| PAYMENT_PENDING | `POST /trades/{id}/cancel` | 구매자·판매자 | CANCELED | Payment 취소 + Market 예약 해제(ON_SALE) |
+| PAID | `POST /trades/{id}/complete` | 구매자 | COMPLETED | Market 판매 완료(SOLD), 같은 상품의 다른 문의 자동 취소 |
 | COMPLETED · CANCELED | 없음 | — | (끝) | 다른 상태로 가는 요청 409, 같은 요청 재전송 200 |
 
 입금이 확인된(PAID) 뒤에는 취소할 수 없습니다. 직송금이라 서버가 돈을 되돌릴 수 없기 때문입니다.
+
+문의(REQUESTED) 단계에는 상품을 예약하지 않습니다. 그래서 한 상품에 여러 구매자가 동시에 문의할 수 있고,
+판매자가 한 명에게 송금 요청을 보내는 순간 Market 상품이 RESERVED가 되어 새 문의를 받지 않습니다.
 
 ## API
 
@@ -74,8 +77,10 @@
 
 | 서버 | 메서드 · 주소 | 요청 | 기대 응답 |
 | --- | --- | --- | --- |
-| Market | `GET /products/{id}` | — | `{productId, title, price, sellerId, status}` (status: ON_SALE / SOLD) |
-| Market | `POST /products/{id}/sold` | — | 200 |
+| Market | `GET /products/{id}` | — | `{productId, title, price, sellerId, status, ...}` (status: ON_SALE / RESERVED / SOLD) |
+| Market | `POST /products/{id}/reservation` | `{tradeId}` | 200 (이미 예약이면 409 PRODUCT_NOT_AVAILABLE) |
+| Market | `DELETE /products/{id}/reservation` | `{tradeId}` | 200 |
+| Market | `POST /products/{id}/complete` | `{tradeId}` | 200 |
 | Payment | `POST /payments` + `Idempotency-Key` | `{tradeId, payerId, payeeId, amount, method: "KAKAOPAY_TRANSFER"}` | 201 `{paymentId, status: "READY", transferUrl}` |
 | Payment | `POST /payments/{id}/approve` | — | 200 |
 | Payment | `POST /payments/{id}/cancel` | — | 200 |
@@ -94,9 +99,15 @@
 
 1. MySQL 실행 (기본: `root` / `1234`, 다르면 환경 변수 `DB_USERNAME`, `DB_PASSWORD`). `trade_db`는 자동 생성됩니다.
 2. 다른 서버 주소는 `application.yml`의 `servers.*`. 아직 없으면 Apidog Mock 주소로 바꿉니다.
-3. 혼자 테스트: **stub 프로필**로 실행하면 Trade 서버 안의 가짜 Market·Chat·Payment(`/stub/**`)를 부릅니다.
+3. 아직 없는 서버는 Trade 서버 안의 가짜(`/stub/**`)로 대신합니다.
+
+   | 프로필 | Market | Payment · Chat | 언제 |
+   | --- | --- | --- | --- |
+   | (없음) | 실제 8082 | 실제 8084 · 8081 | 모든 서버가 준비됐을 때 |
+   | `stub-pay` | 실제 8082 | 가짜 | **지금** — Market은 있고 Payment·Chat은 아직 없음 |
+   | `stub` | 가짜 | 가짜 | Trade 혼자 테스트 (`http/trade-flow.http`, 판매자 100번) |
+
    ```
-   ./gradlew bootRun --args='--spring.profiles.active=stub'
+   ./gradlew bootRun --args='--spring.profiles.active=stub-pay'
    ```
-   그다음 `http/trade-flow.http`를 위에서부터 실행합니다.
 4. Swagger UI: http://localhost:8083/swagger-ui.html

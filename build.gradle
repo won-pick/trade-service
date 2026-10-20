@@ -1,6 +1,6 @@
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '4.0.0'
+    id 'org.springframework.boot' version '4.1.1'
     id 'io.spring.dependency-management' version '1.1.7'
 }
 
@@ -23,8 +23,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     // JDBC (JdbcClient, 트랜잭션, HikariCP 커넥션 풀)
     implementation 'org.springframework.boot:spring-boot-starter-jdbc'
-    // Swagger UI (springdoc-openapi 3.x = Spring Boot 4용)
-    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.0'
+    // Swagger UI (springdoc-openapi 3.x = Spring Boot 4용, Market 서버와 같은 버전)
+    implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.0'
 
     // MySQL 드라이버
     runtimeOnly 'com.mysql:mysql-connector-j'

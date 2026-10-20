@@ -1,0 +1,10 @@
+# Market은 실제 서버(market-service, 8082)를 쓰고, 아직 없는 Payment·Chat만 Trade 안의 가짜(/stub/**)를 쓴다.
+# 실행: ./gradlew bootRun --args='--spring.profiles.active=stub-pay'
+# StubUpstreamController는 이 프로필에서도 떠야 하므로 @Profile({"stub", "stub-pay"}) 로 켠다.
+servers:
+  market:
+    base-url: http://localhost:8082
+  chat:
+    base-url: http://localhost:8083/stub/chat
+  payment:
+    base-url: http://localhost:8083/stub/payment

@@ -16,9 +16,9 @@ spring:
 # 다른 서버 주소 — 아직 완성 전이면 Apidog Mock 주소로 바꿔서 개발한다
 servers:
   market:
-    base-url: http://localhost:8081
+    base-url: http://localhost:8082   # market-service 저장소 기본 포트
   chat:
-    base-url: http://localhost:8082
+    base-url: http://localhost:8081   # chat-service 미정 — 정해지면 바꾼다
   payment:
     base-url: http://localhost:8084
 

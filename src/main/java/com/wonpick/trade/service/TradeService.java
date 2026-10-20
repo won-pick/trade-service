@@ -70,8 +70,11 @@ public class TradeService {
         }
 
         MarketProduct product = market.getProduct(productId);
+        if (MarketClient.RESERVED.equals(product.status())) {
+            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "다른 구매자와 송금이 진행 중인 상품입니다.");
+        }
         if (!MarketClient.ON_SALE.equals(product.status())) {
-            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "판매중인 상품이 아닙니다.");
+            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "판매가 끝난 상품입니다.");
         }
         if (Objects.equals(product.sellerId(), buyerId)) {
             throw new TradeException(ErrorCode.SELF_PURCHASE, "본인이 올린 상품은 구매할 수 없습니다.");
@@ -140,16 +143,25 @@ public class TradeService {
             throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, "다른 구매자에게 이미 송금 요청을 보낸 상품입니다.");
         }
 
-        // 2) Payment에 송금 요청 생성. 실패하면 1)을 되돌린다 (보상)
-        PaymentResponse created;
+        // 2) Market 상품 예약 (ON_SALE → RESERVED). 실패하면 1)을 되돌린다 (보상)
         try {
-            created = payment.requestTransfer(trade);
+            market.reserve(trade.productId(), tradeId);
         } catch (TradeException e) {
             trades.releaseProduct(tradeId);
             throw e;
         }
 
-        // 3) PAYMENT_PENDING
+        // 3) Payment에 송금 요청 생성. 실패하면 2)·1)을 거꾸로 되돌린다 (보상)
+        PaymentResponse created;
+        try {
+            created = payment.requestTransfer(trade);
+        } catch (TradeException e) {
+            releaseQuietly(trade);
+            trades.releaseProduct(tradeId);
+            throw e;
+        }
+
+        // 4) PAYMENT_PENDING
         Integer updated = tx.execute(status -> {
             int n = trades.toPaymentPending(tradeId, created.paymentId(), created.transferUrl());
             if (n == 1) {
@@ -204,8 +216,8 @@ public class TradeService {
             throw invalidStatus(trade, "구매 확정");
         }
 
-        // Market 호출이 실패하면 502로 끝나고 거래는 PAID로 남는다 → 다시 눌러도 안전
-        market.markSold(trade.productId());
+        // Market 판매 완료 (RESERVED → SOLD). 실패하면 502로 끝나고 거래는 PAID로 남는다 → 다시 눌러도 안전
+        market.complete(trade.productId(), tradeId);
 
         Integer updated = tx.execute(status -> {
             int n = trades.toCompleted(tradeId);
@@ -240,9 +252,12 @@ public class TradeService {
                     trade.status() + " 상태의 거래는 취소할 수 없습니다. 입금이 확인된 뒤에는 취소할 수 없어요.");
         }
 
-        // 송금 요청이 나가 있었다면 Payment 쪽도 취소. 실패하면 502, 거래는 그대로
+        // 송금 요청이 나가 있었다면 Payment 취소 + Market 예약 해제. 실패하면 502, 거래는 그대로 (다시 눌러도 안전)
         if (trade.paymentId() != null) {
             payment.cancel(trade.paymentId());
+        }
+        if (trade.status() == TradeStatus.PAYMENT_PENDING) {
+            market.release(trade.productId(), tradeId);
         }
 
         TradeStatus from = trade.status();
@@ -261,6 +276,15 @@ public class TradeService {
     }
 
     // ───────────── 공통 ─────────────
+
+    /** 보상 중의 보상 — 이미 실패를 응답하는 중이라, 예약 해제 실패는 로그만 남긴다 */
+    private void releaseQuietly(Trade trade) {
+        try {
+            market.release(trade.productId(), trade.tradeId());
+        } catch (TradeException e) {
+            log.error("Market 예약 해제 실패 — 수동 확인 필요. tradeId={} productId={}", trade.tradeId(), trade.productId(), e);
+        }
+    }
 
     private Trade getTrade(long tradeId) {
         return trades.findById(tradeId)

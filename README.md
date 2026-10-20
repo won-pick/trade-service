@@ -14,9 +14,9 @@
         └───────────────────────┘
           │          │          │
           ▼          ▼          ▼
-   Market (8082)  Payment (8084)  Chat (8081, 미정)
+   Market (8082)  Payment (8084)  Chat (8080)
    상품 조회·      송금 요청·       거래 채팅방·
-   예약·판매완료    입금 승인·취소    시스템 메시지
+   예약·판매완료    입금 승인·취소
                      ┊
                      ▼
               카카오페이 송금 링크 (구매자가 앱에서 직접 송금)
@@ -25,7 +25,7 @@
 | 서버 | 포트 | DB 스키마 |
 | --- | --- | --- |
 | Market | 8082 | market_db |
-| Chat | 8081 (미정) | (Chat 담당) |
+| Chat | 8080 | 메모리 저장 (재시작 시 초기화) |
 | **Trade** | **8083** | **trade_db** |
 | Payment | 8084 | (Payment 담당) |
 
@@ -84,8 +84,13 @@
 | Payment | `POST /payments` + `Idempotency-Key` | `{tradeId, payerId, payeeId, amount, method: "KAKAOPAY_TRANSFER"}` | 201 `{paymentId, status: "READY", transferUrl}` |
 | Payment | `POST /payments/{id}/approve` | — | 200 |
 | Payment | `POST /payments/{id}/cancel` | — | 200 |
-| Chat | `POST /chat-rooms` | `{tradeId, productId, buyerId, sellerId}` | 201 `{chatRoomId}` |
-| Chat | `POST /chat-rooms/{id}/system-messages` (선택) | `{text}` | 201 |
+| Chat | `POST /chat/rooms` | `{productId, buyerId, sellerId}` | 201 새 방 / 200 기존 방 `{id, productId, buyerId, sellerId}` |
+
+| Chat | `POST /chat/rooms/{id}/messages` + `Idempotency-Key` | `{senderId, content}` | 201 |
+
+Chat에는 시스템 메시지 API가 없어서, 송금 요청·입금 확인 알림은 **그 행동을 한 판매자 이름으로** 보냅니다.
+멱등 키는 `trade-{tradeId}-payment-request`처럼 거래 번호로 만들어, 재시도해도 같은 알림이 두 번 쌓이지 않습니다.
+채팅 실패는 거래를 막지 않습니다 (로그만 남김).
 
 ## DB 스키마 (trade_db)
 
@@ -101,11 +106,11 @@
 2. 다른 서버 주소는 `application.yml`의 `servers.*`. 아직 없으면 Apidog Mock 주소로 바꿉니다.
 3. 아직 없는 서버는 Trade 서버 안의 가짜(`/stub/**`)로 대신합니다.
 
-   | 프로필 | Market | Payment · Chat | 언제 |
-   | --- | --- | --- | --- |
-   | (없음) | 실제 8082 | 실제 8084 · 8081 | 모든 서버가 준비됐을 때 |
-   | `stub-pay` | 실제 8082 | 가짜 | **지금** — Market은 있고 Payment·Chat은 아직 없음 |
-   | `stub` | 가짜 | 가짜 | Trade 혼자 테스트 (`http/trade-flow.http`, 판매자 100번) |
+   | 프로필 | Market | Chat | Payment | 언제 |
+   | --- | --- | --- | --- | --- |
+   | (없음) | 실제 8082 | 실제 8080 | 실제 8084 | 모든 서버가 준비됐을 때 |
+   | `stub-pay` | 실제 8082 | 실제 8080 | 가짜 | **지금** — Payment API만 아직 없음 |
+   | `stub` | 가짜 | 가짜 | 가짜 | Trade 혼자 테스트 (`http/trade-flow.http`, 판매자 100번) |
 
    ```
    ./gradlew bootRun --args='--spring.profiles.active=stub-pay'

@@ -79,18 +79,22 @@ public class StubUpstreamController {
         return Map.of("productId", id, "tradeId", request.get("tradeId"), "status", "SOLD");
     }
 
-    // ── Chat ──
+    // ── Chat (chat-service 와 같은 모양) ──
 
-    @PostMapping("/chat/chat-rooms")
+    @PostMapping("/chat/chat/rooms")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> createChatRoom(@RequestBody Map<String, Object> request) {
-        return Map.of("chatRoomId", chatRoomSequence.incrementAndGet());
+        return Map.of("id", chatRoomSequence.incrementAndGet(),
+                "productId", request.get("productId"),
+                "buyerId", request.get("buyerId"),
+                "sellerId", request.get("sellerId"));
     }
 
-    @PostMapping("/chat/chat-rooms/{id}/system-messages")
+    @PostMapping("/chat/chat/rooms/{id}/messages")
     @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> systemMessage(@PathVariable("id") long id, @RequestBody Map<String, Object> request) {
-        return Map.of("chatRoomId", id, "text", String.valueOf(request.get("text")));
+    public Map<String, Object> message(@PathVariable("id") long id, @RequestBody Map<String, Object> request) {
+        return Map.of("id", chatRoomSequence.get(), "roomId", id,
+                "senderId", request.get("senderId"), "content", String.valueOf(request.get("content")));
     }
 
     // ── Payment ──

@@ -18,9 +18,9 @@ servers:
   market:
     base-url: http://localhost:8082   # market-service 저장소 기본 포트
   chat:
-    base-url: http://localhost:8081   # chat-service 미정 — 정해지면 바꾼다
+    base-url: http://localhost:8080   # chat-service 저장소 기본 포트
   payment:
-    base-url: http://localhost:8084
+    base-url: http://localhost:8084   # payment-service 포트 미정 (지금은 server.port가 없어 8080이라 Chat과 겹침)
 
 springdoc:
   swagger-ui:

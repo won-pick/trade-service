@@ -102,7 +102,7 @@ public class TradeService {
         }
 
         Trade trade = getTrade(Objects.requireNonNull(tradeId));
-        Long chatRoomId = chat.createRoom(trade);   // 실패해도 거래는 유지 (chat 링크만 빠진다)
+        Long chatRoomId = chat.openRoom(trade);   // 실패해도 거래는 유지 (chat 링크만 빠진다)
         if (chatRoomId != null) {
             trades.updateChatRoom(trade.tradeId(), chatRoomId);
             trade = getTrade(trade.tradeId());
@@ -172,7 +172,8 @@ public class TradeService {
         if (updated == null || updated == 0) {
             return currentOrConflict(tradeId, TradeStatus.PAYMENT_PENDING, "송금 요청");
         }
-        chat.sendSystemMessage(trade.chatRoomId(), "판매자가 송금 요청을 보냈어요. 거래 화면에서 송금해 주세요.");
+        chat.notify(trade, memberId, "payment-request",
+                "[WON-pick] 송금 요청을 보냈어요. 거래 화면의 '카카오페이로 송금하기'로 %,d원을 보내 주세요.".formatted(trade.price()));
         return getTrade(tradeId);
     }
 
@@ -200,7 +201,8 @@ public class TradeService {
         if (updated == null || updated == 0) {
             return currentOrConflict(tradeId, TradeStatus.PAID, "입금 확인");
         }
-        chat.sendSystemMessage(trade.chatRoomId(), "판매자가 입금을 확인했어요. 물건을 받으면 구매 확정을 눌러 주세요.");
+        chat.notify(trade, memberId, "payment-confirmed",
+                "[WON-pick] 입금을 확인했어요. 물건을 받으면 거래 화면에서 구매 확정을 눌러 주세요.");
         return getTrade(tradeId);
     }
 

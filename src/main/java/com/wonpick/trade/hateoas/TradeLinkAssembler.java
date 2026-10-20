@@ -69,7 +69,9 @@ public class TradeLinkAssembler {
         // 다른 서버의 자원도 링크로 가리킨다
         links.put("product", new Link(upstream.market().baseUrl() + "/products/" + trade.productId()));
         if (trade.chatRoomId() != null && !status.isFinished()) {
-            links.put("chat", new Link(upstream.chat().baseUrl() + "/chat-rooms/" + trade.chatRoomId()));
+            // Chat의 방 조회는 참여자 확인용 memberId가 필요하다 (GET /chat/rooms/{id}?memberId=)
+            links.put("chat", new Link(upstream.chat().baseUrl() + "/chat/rooms/" + trade.chatRoomId()
+                    + "?memberId=" + viewerId));
         }
         if (trade.paymentId() != null && status != TradeStatus.REQUESTED && status != TradeStatus.CANCELED) {
             links.put("payment", new Link(upstream.payment().baseUrl() + "/payments/" + trade.paymentId()));

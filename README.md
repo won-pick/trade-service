@@ -9,7 +9,9 @@
 각 PC에서 담당 서버만 실행합니다. Trade 기본 포트는 8083, Market 8082, Chat 8080, Payment 8084입니다.
 Trade PC의 MARKET_SERVER_URL, CHAT_SERVER_URL, PAYMENT_SERVER_URL에 각 담당 PC의 실제 주소를 설정하세요.
 프론트의 실제 Origin은 TRADE_CORS_ALLOWED_ORIGINS에 지정합니다.
-DB는 TRADE_DB_URL, DB_USERNAME, DB_PASSWORD로 설정합니다.
+기본 DB는 담당 PC의 localhost:3306/trade_db, 계정은 root / 1234입니다.
+MySQL 실행 후 서버를 시작하면 DB와 없는 테이블을 자동 생성합니다.
+연결 정보를 바꿀 때만 TRADE_DB_URL, DB_USERNAME, DB_PASSWORD를 지정하세요.
 
     .\gradlew.bat bootRun
 

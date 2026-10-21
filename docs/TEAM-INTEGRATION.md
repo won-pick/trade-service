@@ -31,11 +31,36 @@ Spring 서버는 환경 변수를 설정한 터미널 또는 IDE 실행 환경�
     $env:TRADE_CORS_ALLOWED_ORIGINS='http://localhost:5173,http://<FRONTEND_PC_IP>:5173'
     .\gradlew.bat bootRun
 
-DB 설정은 각 서비스가 소유하며 기존 DB 위치·계정은 그대로 두었습니다.
-- Market: MARKET_DB_URL, MARKET_DB_USERNAME, MARKET_DB_PASSWORD. 기본 공유 DB의 테이블은 사전 생성되어 있어야 합니다.
+DB는 각 담당 PC의 로컬 MySQL을 사용합니다. 공용 MySQL 서버에 의존하지 않습니다.
+
+| 서비스 | 기본 DB 주소 | DB 이름 | 계정 |
+| --- | --- | --- | --- |
+| Market | localhost:3306 | market_db | root / 1234 |
+| Trade | localhost:3306 | trade_db | root / 1234 |
+| Chat | localhost:3306 | chat_db | root / 1234 |
+| Payment | localhost:3306 | payment_db | root / 1234 |
+
+MySQL을 먼저 실행한 뒤 각 서버 폴더에서 Gradle bootRun을 실행하세요.
+Payment의 Gradle 프로젝트는 payment-service/payment 폴더에 있습니다.
+기본 JDBC URL의 createDatabaseIfNotExist=true가 DB를 만들고, schema.sql이 없는 테이블을 생성합니다.
+MySQL 자체 설치·실행과 root 계정 설정은 노트북에 준비돼 있어야 합니다.
+테이블이 이미 있으면 삭제하거나 비우지 않으며, 재시작해도 데이터가 유지됩니다.
+테이블 구조 변경을 자동으로 적용하는 마이그레이션 기능은 아닙니다.
+
+연결 정보를 바꾸려는 경우에만 다음 환경 변수를 지정합니다.
+
+- Market: MARKET_DB_URL, MARKET_DB_USERNAME, MARKET_DB_PASSWORD.
 - Trade: TRADE_DB_URL, DB_USERNAME, DB_PASSWORD.
 - Payment: PAYMENT_DB_URL, PAYMENT_DB_USERNAME, PAYMENT_DB_PASSWORD.
-- Chat: 기본 H2는 재시작하면 초기화됩니다. 반복 통합 시연에는 mysql 프로필과 CHAT_DB_URL, CHAT_DB_USER, CHAT_DB_PASSWORD를 사용하세요.
+- Chat: CHAT_DB_URL, CHAT_DB_USER, CHAT_DB_PASSWORD.
+
+예전에 설정한 환경 변수나 IntelliJ 실행 옵션이 남아 있으면 기본값보다 우선 적용됩니다.
+기존 공유 DB 주소·별도 계정·H2 프로필 설정은 해제하고 실행하세요.
+Chat은 프로필 없이 MySQL을 사용하며, 기존 mysql 프로필도 호환됩니다.
+임시 H2가 필요할 때만 Chat의 h2 프로필 또는 Market의 demo 프로필을 명시적으로 사용하세요.
+프론트는 DB가 필요 없습니다. 서버 간 통신 주소만 각 담당 PC IP로 설정합니다.
+기존 Market 공유 DB 또는 Payment의 wonpick DB 데이터는 새 DB로 자동 복사되지 않습니다.
+이전 데이터가 필요하면 별도로 이관하거나 DB URL 환경 변수로 기존 DB를 명시해야 합니다.
 
 프론트는 won-pick-web/.env.example을 .env로 복사해 실제 IP를 채우고 npm ci, npm run dev로 실행합니다.
 .env 변경 후에는 Vite를 재시작해야 합니다. /chat-api 프록시는 Vite에서 Chat PC로 전달합니다.
@@ -105,9 +130,11 @@ _links.chat은 /chat/rooms/{id}?memberId=조회자ID이며 프론트가 /chat-ap
 
 - Trade 11개, Market 24개, Chat 8개, Payment 5개 테스트 통과 (총 48개).
 - 프론트 npm run build 통과.
+- 로컬 MySQL 8.0의 별도 검증 DB에서 서버 4개의 DB·테이블 자동 생성, 결제·취소·환불 HTTP 연동을 확인했습니다.
+- Chat을 재시작한 뒤 MySQL의 채팅방·메시지가 유지되는 것을 확인했습니다. 검증 DB만 정리하고 기존 DB는 유지했습니다.
 - 실제 서버 4개와 Vite를 임시 포트·독립 H2 메모리 DB로 실행한 HTTP 통합 검증 통과.
 - 확인 항목: 회원·상품 생성, Vite를 통한 채팅방·메시지 생성, 결제 요청 재시도, 채팅방별 거래 조회, 구매자 결제 재시도 시 잔액 1회 차감, 구매 확정 시 SOLD, 결제 전 취소 시 ON_SALE.
 - 검증용 프로세스는 종료했습니다. 팀 PC 네트워크와 운영 MySQL 연결은 이 검증에 포함하지 않았습니다.
 
 
-각 저장소의 Gradle test 또는 프론트 npm run build로 검증할 수 있습니다. 한 PC 테스트 실행 스크립트는 별도의 로컬 작업 폴더 도구이며 이 배포 설정에 포함하지 않습니다.
+각 저장소의 Gradle test 또는 프론트 npm run build로 검증할 수 있습니다. 자동 테스트는 별도 H2 메모리 DB를 사용하므로 담당 MySQL DB 데이터를 변경하지 않습니다.

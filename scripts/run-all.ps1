@@ -61,7 +61,7 @@ $localJdbc = "createDatabaseIfNotExist=true&$jdbcOpts"
 
 # ── Market DB: 기본은 이 PC, -SharedMarketDb 면 팀 공유 DB ──
 $marketEnv = @{
-    MARKET_DB_URL = "jdbc:mysql://localhost:3306/wonpick_market?$localJdbc"
+    MARKET_DB_URL = "jdbc:mysql://localhost:3306/market_db?$localJdbc"
     MARKET_DB_USERNAME = $DbUser; MARKET_DB_PASSWORD = $DbPassword
     SPRING_SQL_INIT_MODE = 'always'          # 로컬 DB는 Market의 schema.sql로 테이블을 만든다
     TRADE_BASE_URL = "http://${ip}:8083"; MARKET_CORS_ALLOWED_ORIGINS = $origins
@@ -77,7 +77,7 @@ if ($SharedMarketDb) {
         Write-Host "공유 Market DB(${SharedMarketHost}:3306)에 연결할 수 없어 이 PC의 MySQL을 씁니다." -ForegroundColor Yellow
     }
 } else {
-    Write-Host 'Market DB: 이 PC의 MySQL wonpick_market' -ForegroundColor Green
+    Write-Host 'Market DB: 이 PC의 MySQL market_db' -ForegroundColor Green
 }
 
 # ── 창 하나에 서버 하나 ──

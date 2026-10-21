@@ -20,6 +20,7 @@ public class PaymentClient {
     public record OrderResponse(Long orderId, String status) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PaymentResponse(Long paymentId, String status) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record PaymentError(String message, String detail) {}
     private final RestClient rest;
     public PaymentClient(UpstreamProperties properties) {

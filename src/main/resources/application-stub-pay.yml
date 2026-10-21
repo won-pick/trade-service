@@ -1,0 +1,9 @@
+# Market(8082)·Chat(8080)은 실제 서버를 쓰고, 아직 API가 없는 Payment만 Trade 안의 가짜(/stub/payment)를 쓴다.
+# 실행: ./gradlew bootRun --args='--spring.profiles.active=stub-pay'
+servers:
+  market:
+    base-url: ${MARKET_URL:http://localhost:8082}
+  chat:
+    base-url: ${CHAT_URL:http://localhost:8080}
+  payment:
+    base-url: http://localhost:8083/stub/payment

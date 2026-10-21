@@ -30,7 +30,7 @@ public enum TradeStatus {
         return this == PAID;
     }
 
-    /** 입금이 확인(PAID)되기 전까지만 취소할 수 있다. 결제 완료 건은 Payment 환불 후 예약을 해제한다. */
+    /** 구매 확정 전까지 취소할 수 있다. 결제 완료 건은 Payment 환불 후 예약을 해제한다. */
     public boolean isCancelable() {
         return this == REQUESTED || this == PAYMENT_REQUESTED || this == PAID;
     }

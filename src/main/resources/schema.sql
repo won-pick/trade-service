@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS trades (
   UNIQUE KEY uk_trades_active_product (active_product_id),   -- 한 상품에 송금 단계 거래는 하나뿐 (NULL은 여러 개 허용)
   INDEX idx_trades_buyer (buyer_id, status),
   INDEX idx_trades_seller (seller_id, status),
-  INDEX idx_trades_product (product_id, status)
+  INDEX idx_trades_product (product_id, status),
+  INDEX idx_trades_chat_room (chat_room_id)
 );
 
 CREATE TABLE IF NOT EXISTS trade_idempotency_keys (

@@ -1,4 +1,4 @@
-# 혼자 테스트용 프로필 — 다른 서버 없이 Trade 서버 안의 가짜 Market/Chat/Payment(/stub/**)를 부른다
+# 혼자 테스트용 프로필 — Trade 안의 가짜 Market/Chat/Payment(/stub/**)를 부른다.
 # 실행: 프로필 stub 활성화 (IntelliJ Active profiles: stub, 또는 ./gradlew bootRun --args='--spring.profiles.active=stub')
 servers:
   market:

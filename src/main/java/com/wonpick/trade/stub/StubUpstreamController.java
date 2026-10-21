@@ -9,7 +9,7 @@ import io.swagger.v3.oas.annotations.Hidden;
 
 /** stub 프로필의 규격 확인용 응답. 잔액 검증은 실제 Payment 서버에서 수행한다. */
 @Hidden
-@Profile("stub")
+@Profile({"stub", "stub-pay"})
 @RestController
 @RequestMapping("/stub")
 public class StubUpstreamController {

@@ -1,6 +1,8 @@
 package com.wonpick.trade.client;
 
 import org.springframework.stereotype.Component;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
@@ -45,11 +47,20 @@ public class MarketClient {
         return product;
     }
 
-    /** POST /products/{id}/sold — 판매완료 (이미 판매완료여도 200을 기대) */
-    public void markSold(long productId) {
-        RestClients.call("Market", () -> rest.post()
-                .uri("/products/{id}/sold", productId)
-                .retrieve()
-                .toBodilessEntity());
+    public record ReservationRequest(long tradeId) {}
+    public void reserve(long productId, long tradeId) {
+        changeReservation(HttpMethod.POST, productId, tradeId, "reservation");
+    }
+    public void release(long productId, long tradeId) {
+        changeReservation(HttpMethod.DELETE, productId, tradeId, "reservation");
+    }
+    public void markSold(long productId, long tradeId) {
+        changeReservation(HttpMethod.POST, productId, tradeId, "complete");
+    }
+    private void changeReservation(HttpMethod method, long productId, long tradeId, String action) {
+        RestClients.call("Market", () -> rest.method(method)
+                .uri("/products/{id}/{action}", productId, action)
+                .contentType(MediaType.APPLICATION_JSON).body(new ReservationRequest(tradeId))
+                .retrieve().toBodilessEntity());
     }
 }

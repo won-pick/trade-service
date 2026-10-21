@@ -28,7 +28,7 @@ public class TradeRepository {
 
     private static final String SELECT_ALL = """
             SELECT trade_id, product_id, product_title, price, buyer_id, seller_id, status,
-                   payment_id, transfer_url, chat_room_id, cancel_reason, canceled_by, created_at, updated_at
+                   payment_id, chat_room_id, cancel_reason, canceled_by, created_at, updated_at
               FROM trades""";
 
     private static final RowMapper<Trade> MAPPER = (rs, rowNum) -> new Trade(
@@ -40,7 +40,6 @@ public class TradeRepository {
             rs.getLong("seller_id"),
             TradeStatus.valueOf(rs.getString("status")),
             rs.getObject("payment_id", Long.class),
-            rs.getString("transfer_url"),
             rs.getObject("chat_room_id", Long.class),
             rs.getString("cancel_reason"),
             rs.getObject("canceled_by", Long.class),
@@ -63,7 +62,7 @@ public class TradeRepository {
                 .param("price", price)
                 .param("buyerId", buyerId)
                 .param("sellerId", sellerId)
-                .update(keyHolder);
+                .update(keyHolder, "trade_id");
         return Objects.requireNonNull(keyHolder.getKey(), "생성된 trade_id가 없습니다").longValue();
     }
 
@@ -78,7 +77,7 @@ public class TradeRepository {
     public Optional<Trade> findOpenByProductAndBuyer(long productId, long buyerId) {
         return jdbc.sql(SELECT_ALL + " " + """
                          WHERE product_id = :productId AND buyer_id = :buyerId
-                           AND status IN ('REQUESTED', 'PAYMENT_PENDING', 'PAID')
+                           AND status IN ('REQUESTED', 'PAYMENT_REQUESTED', 'PAID')
                          ORDER BY trade_id DESC LIMIT 1""")
                 .param("productId", productId)
                 .param("buyerId", buyerId)
@@ -96,7 +95,7 @@ public class TradeRepository {
     }
 
     /** 내가 구매자이거나 판매자인 거래 목록. role·status·productId는 있으면 거른다 */
-    public List<Trade> findByViewer(long viewerId, TradeRole role, TradeStatus status, Long productId) {
+    public List<Trade> findByViewer(long viewerId, TradeRole role, TradeStatus status, Long productId, Long chatRoomId) {
         StringBuilder sql = new StringBuilder(SELECT_ALL).append(" WHERE ");
         Map<String, Object> params = new HashMap<>();
         params.put("viewer", viewerId);
@@ -115,6 +114,10 @@ public class TradeRepository {
         if (productId != null) {
             sql.append(" AND product_id = :productId");
             params.put("productId", productId);
+        }
+        if (chatRoomId != null) {
+            sql.append(" AND chat_room_id = :chatRoomId");
+            params.put("chatRoomId", chatRoomId);
         }
         sql.append(" ORDER BY trade_id DESC");
 
@@ -147,18 +150,17 @@ public class TradeRepository {
                 .update();
     }
 
-    public int toPaymentPending(long tradeId, long paymentId, String transferUrl) {
+    public int toPaymentPending(long tradeId, long paymentId) {
         return jdbc.sql("""
-                        UPDATE trades SET status = 'PAYMENT_PENDING', payment_id = :paymentId, transfer_url = :transferUrl
+                        UPDATE trades SET status = 'PAYMENT_REQUESTED', payment_id = :paymentId
                          WHERE trade_id = :id AND status = 'REQUESTED'""")
                 .param("paymentId", paymentId)
-                .param("transferUrl", transferUrl)
                 .param("id", tradeId)
                 .update();
     }
 
     public int toPaid(long tradeId) {
-        return jdbc.sql("UPDATE trades SET status = 'PAID' WHERE trade_id = :id AND status = 'PAYMENT_PENDING'")
+        return jdbc.sql("UPDATE trades SET status = 'PAID' WHERE trade_id = :id AND status = 'PAYMENT_REQUESTED'")
                 .param("id", tradeId)
                 .update();
     }
@@ -175,7 +177,7 @@ public class TradeRepository {
         return jdbc.sql("""
                         UPDATE trades SET status = 'CANCELED', active_product_id = NULL,
                                           cancel_reason = :reason, canceled_by = :canceledBy
-                         WHERE trade_id = :id AND status IN ('REQUESTED', 'PAYMENT_PENDING')""")
+                         WHERE trade_id = :id AND status IN ('REQUESTED', 'PAYMENT_REQUESTED', 'PAID')""")
                 .param("reason", reason)
                 .param("canceledBy", canceledBy)
                 .param("id", tradeId)

@@ -3,67 +3,79 @@ package com.wonpick.trade.client;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
-
+import org.springframework.web.client.HttpClientErrorException;
+import java.util.function.Supplier;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.wonpick.trade.config.UpstreamProperties;
 import com.wonpick.trade.domain.Trade;
 import com.wonpick.trade.exception.ErrorCode;
 import com.wonpick.trade.exception.TradeException;
 
-/**
- * Payment 서버 (결제·환불) 호출.
- * 금액은 React가 아니라 Trade가 거래 생성 때 저장한 가격(스냅샷)을 넘긴다 — 화면에서 금액을 고쳐 보내는 위변조 방지.
- */
+/** Payment의 가상 잔액 결제 계약. 외부 PG를 호출하지 않는다. */
 @Component
 public class PaymentClient {
-
-    public static final String METHOD_KAKAOPAY_TRANSFER = "KAKAOPAY_TRANSFER";
-
-    public record PaymentCreateRequest(Long tradeId, Long payerId, Long payeeId, long amount, String method) {
-    }
-
+    public record OrderRequest(Long sellerId, long amount) {}
+    public record PayRequest(Long buyerId, String idempotencyKey) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record PaymentResponse(Long paymentId, String status, String transferUrl) {
-    }
-
+    public record OrderResponse(Long orderId, String status) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PaymentResponse(Long paymentId, String status) {}
+    public record PaymentError(String message, String detail) {}
     private final RestClient rest;
-
     public PaymentClient(UpstreamProperties properties) {
-        this.rest = RestClients.create(properties.payment().baseUrl());
+        rest = RestClients.create(properties.payment().baseUrl());
     }
-
-    /**
-     * POST /payments — 판매자가 구매자에게 보내는 송금 요청(READY).
-     * 거래 번호로 만든 Idempotency-Key를 보내, 재시도해도 송금 요청이 두 건 생기지 않게 한다.
-     */
-    public PaymentResponse requestTransfer(Trade trade) {
-        PaymentResponse response = RestClients.call("Payment", () -> rest.post()
-                .uri("/payments")
-                .header("Idempotency-Key", "trade-" + trade.tradeId() + "-payment-request")
+    public long createOrder(Trade trade) {
+        OrderResponse response = RestClients.call("Payment", () -> rest.post().uri("/orders")
+                .header("Idempotency-Key", "trade-" + trade.tradeId() + "-order")
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new PaymentCreateRequest(trade.tradeId(), trade.buyerId(), trade.sellerId(),
-                        trade.price(), METHOD_KAKAOPAY_TRANSFER))
-                .retrieve()
-                .body(PaymentResponse.class));
-        if (response == null || response.paymentId() == null) {
-            throw new TradeException(ErrorCode.UPSTREAM_UNAVAILABLE, "Payment 서버가 송금 요청 번호를 주지 않았습니다.");
+                .body(new OrderRequest(trade.sellerId(), trade.price()))
+                .retrieve().body(OrderResponse.class));
+        if (response == null || response.orderId() == null) throw invalidResponse();
+        return response.orderId();
+    }
+    public void pay(Trade trade) {
+        PaymentResponse response = rejectable(() -> rest.post()
+                .uri("/orders/{id}/payments", trade.paymentId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new PayRequest(trade.buyerId(), "trade-" + trade.tradeId() + "-pay"))
+                .retrieve().body(PaymentResponse.class));
+        if (response == null || !trade.paymentId().equals(response.paymentId())
+                || !"COMPLETED".equals(response.status())) throw invalidResponse();
+    }
+    /** 결제 응답 유실 후 취소해도 실제 Payment 상태에 맞춰 환불한다. */
+    public void cancelOrRefund(long orderId) {
+        PaymentResponse response = RestClients.call("Payment", () -> rest.get()
+                .uri("/payments/{id}", orderId).retrieve().body(PaymentResponse.class));
+        if (response == null || !Long.valueOf(orderId).equals(response.paymentId())) throw invalidResponse();
+        switch (response.status()) {
+            case "CANCELED", "REFUNDED" -> { return; }
+            case "PENDING" -> RestClients.call("Payment", () -> rest.post()
+                    .uri("/orders/{id}/cancel", orderId).retrieve().toBodilessEntity());
+            case "COMPLETED" -> rejectable(() -> rest.post()
+                    .uri("/payments/{id}/refund", orderId).retrieve().toBodilessEntity());
+            default -> throw invalidResponse();
         }
-        return response;
     }
-
-    /** POST /payments/{id}/approve — 판매자 입금 확인 */
-    public void approve(long paymentId) {
-        RestClients.call("Payment", () -> rest.post()
-                .uri("/payments/{id}/approve", paymentId)
-                .retrieve()
-                .toBodilessEntity());
+    private <T> T rejectable(Supplier<T> call) {
+        try {
+            return RestClients.call("Payment", call);
+        } catch (TradeException e) {
+            if (e.getCause() instanceof HttpClientErrorException error) {
+                String reason = "결제 또는 환불이 거절되었습니다.";
+                try {
+                    PaymentError body = error.getResponseBodyAs(PaymentError.class);
+                    if (body != null) {
+                        if (body.message() != null && !body.message().isBlank()) reason = body.message();
+                        else if (body.detail() != null && !body.detail().isBlank()) reason = body.detail();
+                    }
+                } catch (RuntimeException ignored) { }
+                throw new TradeException(ErrorCode.PAYMENT_REJECTED, reason, e);
+            }
+            throw e;
+        }
     }
-
-    /** POST /payments/{id}/cancel — 송금 요청 취소 */
-    public void cancel(long paymentId) {
-        RestClients.call("Payment", () -> rest.post()
-                .uri("/payments/{id}/cancel", paymentId)
-                .retrieve()
-                .toBodilessEntity());
+    private TradeException invalidResponse() {
+        return new TradeException(ErrorCode.UPSTREAM_UNAVAILABLE, "Payment 응답의 번호나 상태가 올바르지 않습니다.");
     }
 }

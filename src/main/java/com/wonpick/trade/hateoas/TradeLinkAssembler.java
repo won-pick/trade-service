@@ -14,19 +14,7 @@ import com.wonpick.trade.dto.Link;
 import com.wonpick.trade.dto.TradeListResponse;
 import com.wonpick.trade.dto.TradeResponse;
 
-/**
- * HATEOAS — 거래 상태 × 보는 사람(구매자/판매자)에 따라 "지금 할 수 있는 일"을 링크로 담는다.
- *
- * | 상태            | 구매자                                          | 판매자                                                  |
- * |-----------------|-------------------------------------------------|---------------------------------------------------------|
- * | REQUESTED       | self, product, chat, cancel                     | self, product, chat, request-payment, cancel            |
- * | PAYMENT_PENDING | self, product, chat, payment, transfer, cancel  | self, product, chat, payment, confirm-payment, cancel   |
- * | PAID            | self, product, chat, payment, complete          | self, product, chat, payment                            |
- * | COMPLETED       | self, product, payment                          | self, product, payment                                  |
- * | CANCELED        | self, product                                   | self, product                                           |
- *
- * React는 링크가 있으면 버튼을 보여 줄 뿐, 상태나 역할로 판단하지 않는다.
- */
+/** 상태와 참여자 역할에 따라 실행 가능한 링크를 제공한다. */
 @Component
 public class TradeLinkAssembler {
 
@@ -69,7 +57,7 @@ public class TradeLinkAssembler {
         // 다른 서버의 자원도 링크로 가리킨다
         links.put("product", new Link(upstream.market().baseUrl() + "/products/" + trade.productId()));
         if (trade.chatRoomId() != null && !status.isFinished()) {
-            links.put("chat", new Link(upstream.chat().baseUrl() + "/chat-rooms/" + trade.chatRoomId()));
+            links.put("chat", new Link(upstream.chat().baseUrl() + "/chat/rooms/" + trade.chatRoomId() + "?memberId=" + viewerId));
         }
         if (trade.paymentId() != null && status != TradeStatus.REQUESTED && status != TradeStatus.CANCELED) {
             links.put("payment", new Link(upstream.payment().baseUrl() + "/payments/" + trade.paymentId()));
@@ -79,11 +67,8 @@ public class TradeLinkAssembler {
         if (seller && status.canRequestPayment()) {
             links.put("request-payment", new Link(self + "/request-payment"));
         }
-        if (buyer && status == TradeStatus.PAYMENT_PENDING && trade.transferUrl() != null) {
-            links.put("transfer", new Link(trade.transferUrl()));   // 외부(카카오페이) 송금 링크
-        }
-        if (seller && status.canConfirmPayment()) {
-            links.put("confirm-payment", new Link(self + "/confirm-payment"));
+        if (buyer && status.canPay()) {
+            links.put("pay", new Link(self + "/pay"));
         }
         if (buyer && status.canComplete()) {
             links.put("complete", new Link(self + "/complete"));

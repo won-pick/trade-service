@@ -12,7 +12,6 @@ public record Trade(
         Long sellerId,
         TradeStatus status,
         Long paymentId,
-        String transferUrl,
         Long chatRoomId,
         String cancelReason,
         Long canceledBy,

@@ -13,6 +13,7 @@ public enum ErrorCode {
     INVALID_STATUS(HttpStatus.CONFLICT, "거래 상태 오류"),
     SELF_PURCHASE(HttpStatus.UNPROCESSABLE_CONTENT, "본인 상품 구매"),
     UPSTREAM_UNAVAILABLE(HttpStatus.BAD_GATEWAY, "연동 서버 오류"),
+    PAYMENT_REJECTED(HttpStatus.UNPROCESSABLE_CONTENT, "결제·환불 거절"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류");
 
     private final HttpStatus status;

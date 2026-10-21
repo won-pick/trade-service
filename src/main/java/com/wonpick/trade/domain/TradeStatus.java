@@ -4,7 +4,7 @@ package com.wonpick.trade.domain;
  * 거래 상태와 상태 전이 규칙.
  *
  * <pre>
- * REQUESTED ──request-payment(판매자)──▶ PAYMENT_PENDING ──confirm-payment(판매자)──▶ PAID ──complete(구매자)──▶ COMPLETED
+ * REQUESTED ──request-payment(판매자)──▶ PAYMENT_REQUESTED ──pay(구매자)──▶ PAID ──complete(구매자)──▶ COMPLETED
  *     │                                        │
  *     └──────────── cancel(구매자·판매자) ──────┴──▶ CANCELED
  * </pre>
@@ -13,7 +13,7 @@ package com.wonpick.trade.domain;
  */
 public enum TradeStatus {
     REQUESTED,
-    PAYMENT_PENDING,
+    PAYMENT_REQUESTED,
     PAID,
     COMPLETED,
     CANCELED;
@@ -22,17 +22,17 @@ public enum TradeStatus {
         return this == REQUESTED;
     }
 
-    public boolean canConfirmPayment() {
-        return this == PAYMENT_PENDING;
+    public boolean canPay() {
+        return this == PAYMENT_REQUESTED;
     }
 
     public boolean canComplete() {
         return this == PAID;
     }
 
-    /** 입금이 확인(PAID)되기 전까지만 취소할 수 있다. 직송금이라 서버가 돈을 되돌릴 수 없기 때문. */
+    /** 입금이 확인(PAID)되기 전까지만 취소할 수 있다. 결제 완료 건은 Payment 환불 후 예약을 해제한다. */
     public boolean isCancelable() {
-        return this == REQUESTED || this == PAYMENT_PENDING;
+        return this == REQUESTED || this == PAYMENT_REQUESTED || this == PAID;
     }
 
     public boolean isFinished() {

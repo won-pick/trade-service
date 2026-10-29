@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="ko"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TradeService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">trade-service</a> &gt; <a href="index.source.html" class="el_package">com.wonpick.trade.service</a> &gt; <span class="el_source">TradeService.java</span></div><h1>TradeService.java</h1><pre class="source lang-java linenums">package com.wonpick.trade.service;
+
+import java.util.List;
+import java.util.Objects;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import com.wonpick.trade.client.*;
+import com.wonpick.trade.domain.*;
+import com.wonpick.trade.exception.*;
+import com.wonpick.trade.repository.*;
+
+/**
+ * 판매자의 결제 요청 → 구매자의 가상 잔액 결제 → 구매 확정.
+ * 현재 배포는 Trade 한 인스턴스다. 변경 요청을 직렬화하고 외부 HTTP는 DB 트랜잭션 밖에서 실행한다.
+ * REQUESTED는 외부 요청 실패 후 동일 거래로 다시 시도할 수 있는 준비 상태다.
+ */
+@Service
+public class TradeService {
+<span class="fc" id="L21">    public record CreateResult(Trade trade, boolean created) {}</span>
+    private final TradeRepository trades;
+    private final IdempotencyKeyRepository keys;
+    private final MarketClient market;
+    private final PaymentClient payment;
+    private final ChatClient chat;
+    private final TransactionTemplate tx;
+
+    public TradeService(TradeRepository trades, IdempotencyKeyRepository keys, MarketClient market,
+<span class="fc" id="L30">            PaymentClient payment, ChatClient chat, PlatformTransactionManager manager) {</span>
+<span class="fc" id="L31">        this.trades = trades; this.keys = keys; this.market = market;</span>
+<span class="fc" id="L32">        this.payment = payment; this.chat = chat; this.tx = new TransactionTemplate(manager);</span>
+<span class="fc" id="L33">    }</span>
+
+    public synchronized CreateResult create(long sellerId, long productId, long buyerId,
+            long chatRoomId, String key) {
+<span class="fc bfc" id="L37" title="All 2 branches covered.">        if (key != null) {</span>
+<span class="fc" id="L38">            var previous = keys.findTradeId(key);</span>
+<span class="fc bfc" id="L39" title="All 2 branches covered.">            if (previous.isPresent()) {</span>
+<span class="fc" id="L40">                Trade trade = getTrade(previous.get());</span>
+<span class="fc bfc" id="L41" title="All 4 branches covered.">                if (!trade.isSeller(sellerId) || trade.productId() != productId</span>
+<span class="fc bfc" id="L42" title="All 4 branches covered.">                        || trade.buyerId() != buyerId || !Objects.equals(trade.chatRoomId(), chatRoomId)) {</span>
+<span class="fc" id="L43">                    throw new TradeException(ErrorCode.INVALID_STATUS, &quot;같은 멱등 키를 다른 요청에 사용할 수 없습니다.&quot;);</span>
+                }
+<span class="fc" id="L45">                return new CreateResult(resume(trade, sellerId), false);</span>
+            }
+        }
+<span class="fc" id="L48">        var product = market.getProduct(productId);</span>
+<span class="fc bfc" id="L49" title="All 2 branches covered.">        if (!Objects.equals(product.sellerId(), sellerId)) {</span>
+<span class="fc" id="L50">            throw new TradeException(ErrorCode.ROLE_NOT_ALLOWED, &quot;결제 요청은 상품 판매자만 보낼 수 있습니다.&quot;);</span>
+        }
+<span class="fc bfc" id="L52" title="All 2 branches covered.">        if (sellerId == buyerId) throw new TradeException(ErrorCode.SELF_PURCHASE, &quot;본인 상품은 구매할 수 없습니다.&quot;);</span>
+<span class="fc" id="L53">        chat.validateRoom(chatRoomId, productId, buyerId, sellerId);</span>
+<span class="fc" id="L54">        var existing = trades.findOpenByProductAndBuyer(productId, buyerId);</span>
+<span class="fc bfc" id="L55" title="All 2 branches covered.">        if (existing.isPresent()) {</span>
+<span class="fc" id="L56">            Trade trade = existing.get();</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">            if (!Objects.equals(trade.chatRoomId(), chatRoomId)) {</span>
+<span class="fc" id="L58">                throw new TradeException(ErrorCode.INVALID_INPUT, &quot;기존 거래의 채팅방과 다릅니다.&quot;);</span>
+            }
+<span class="fc bfc" id="L60" title="All 2 branches covered.">            if (key != null) keys.save(key, trade.tradeId());</span>
+<span class="fc" id="L61">            return new CreateResult(resume(trade, sellerId), false);</span>
+        }
+<span class="fc bfc" id="L63" title="All 2 branches covered.">        if (!MarketClient.ON_SALE.equals(product.status())) {</span>
+<span class="fc" id="L64">            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, &quot;판매 중인 상품이 아닙니다.&quot;);</span>
+        }
+        // Payment와 같은 규격: 무료 상품은 채팅으로 합의하며 유료 결제를 요청하지 않는다.
+<span class="fc bfc" id="L67" title="All 2 branches covered.">        if (product.price() &lt;= 0) throw new TradeException(ErrorCode.INVALID_INPUT, &quot;결제 금액은 0원보다 커야 합니다.&quot;);</span>
+<span class="fc" id="L68">        Long id = tx.execute(status -&gt; {</span>
+<span class="fc" id="L69">            long tradeId = trades.insert(productId, product.title(), product.price(), buyerId, sellerId);</span>
+<span class="fc" id="L70">            trades.updateChatRoom(tradeId, chatRoomId);</span>
+<span class="fc" id="L71">            trades.insertHistory(tradeId, null, TradeStatus.REQUESTED, sellerId);</span>
+<span class="fc bfc" id="L72" title="All 2 branches covered.">            if (key != null) keys.save(key, tradeId);</span>
+<span class="fc" id="L73">            return tradeId;</span>
+        });
+<span class="fc" id="L75">        return new CreateResult(requestPayment(Objects.requireNonNull(id), sellerId), true);</span>
+    }
+
+    private Trade resume(Trade trade, long sellerId) {
+<span class="fc bfc" id="L79" title="All 2 branches covered.">        return trade.status() == TradeStatus.REQUESTED ? requestPayment(trade.tradeId(), sellerId) : trade;</span>
+    }
+    public Trade get(long id, long memberId) {
+<span class="fc" id="L82">        Trade trade = getTrade(id); requireParticipant(trade, memberId); return trade;</span>
+    }
+    public List&lt;Trade&gt; list(long memberId, TradeRole role, TradeStatus status, Long productId, Long chatRoomId) {
+<span class="fc" id="L85">        return trades.findByViewer(memberId, role, status, productId, chatRoomId);</span>
+    }
+
+    public synchronized Trade requestPayment(long id, long memberId) {
+<span class="fc" id="L89">        Trade trade = getTrade(id);</span>
+<span class="fc" id="L90">        requireRole(trade, memberId, TradeRole.SELLER);</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (trade.status() == TradeStatus.PAYMENT_REQUESTED) return trade;</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (!trade.status().canRequestPayment()) throw invalidStatus(trade);</span>
+        try {
+<span class="fc" id="L94">            trades.claimProduct(id);</span>
+<span class="fc" id="L95">        } catch (DuplicateKeyException e) {</span>
+<span class="fc" id="L96">            throw new TradeException(ErrorCode.PRODUCT_NOT_AVAILABLE, &quot;다른 구매자와 거래 중인 상품입니다.&quot;);</span>
+<span class="fc" id="L97">        }</span>
+        // 응답 유실 시 예약/주문을 되돌리지 않고 동일 tradeId/멱등 키로 재개한다.
+<span class="fc" id="L99">        market.reserve(trade.productId(), id);</span>
+<span class="fc" id="L100">        long orderId = payment.createOrder(trade);</span>
+<span class="fc" id="L101">        tx.executeWithoutResult(status -&gt; {</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">            if (trades.toPaymentPending(id, orderId) == 1)</span>
+<span class="fc" id="L103">                trades.insertHistory(id, TradeStatus.REQUESTED, TradeStatus.PAYMENT_REQUESTED, memberId);</span>
+<span class="fc" id="L104">        });</span>
+<span class="fc" id="L105">        return getTrade(id);</span>
+    }
+
+    public synchronized Trade pay(long id, long memberId) {
+<span class="fc" id="L109">        Trade trade = getTrade(id);</span>
+<span class="fc" id="L110">        requireRole(trade, memberId, TradeRole.BUYER);</span>
+<span class="fc bfc" id="L111" title="All 2 branches covered.">        if (trade.status() == TradeStatus.PAID) return trade;</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">        if (!trade.status().canPay()) throw invalidStatus(trade);</span>
+<span class="fc" id="L113">        payment.pay(trade);</span>
+<span class="fc" id="L114">        tx.executeWithoutResult(status -&gt; {</span>
+<span class="fc bfc" id="L115" title="All 2 branches covered.">            if (trades.toPaid(id) == 1)</span>
+<span class="fc" id="L116">                trades.insertHistory(id, TradeStatus.PAYMENT_REQUESTED, TradeStatus.PAID, memberId);</span>
+<span class="fc" id="L117">        });</span>
+<span class="fc" id="L118">        return getTrade(id);</span>
+    }
+
+    public synchronized Trade complete(long id, long memberId) {
+<span class="fc" id="L122">        Trade trade = getTrade(id);</span>
+<span class="fc" id="L123">        requireRole(trade, memberId, TradeRole.BUYER);</span>
+<span class="fc bfc" id="L124" title="All 2 branches covered.">        if (trade.status() == TradeStatus.COMPLETED) return trade;</span>
+<span class="fc bfc" id="L125" title="All 2 branches covered.">        if (!trade.status().canComplete()) throw invalidStatus(trade);</span>
+<span class="fc" id="L126">        market.markSold(trade.productId(), id);</span>
+<span class="fc" id="L127">        tx.executeWithoutResult(status -&gt; {</span>
+<span class="fc bfc" id="L128" title="All 2 branches covered.">            if (trades.toCompleted(id) == 1)</span>
+<span class="fc" id="L129">                trades.insertHistory(id, TradeStatus.PAID, TradeStatus.COMPLETED, memberId);</span>
+<span class="fc" id="L130">        });</span>
+<span class="fc" id="L131">        return getTrade(id);</span>
+    }
+
+    /** 구매 확정 전 취소. Payment의 실제 상태를 확인해 결제 완료 건은 환불한다. */
+    public synchronized Trade cancel(long id, long memberId, String reason) {
+<span class="fc" id="L136">        Trade trade = getTrade(id);</span>
+<span class="fc" id="L137">        requireParticipant(trade, memberId);</span>
+<span class="fc bfc" id="L138" title="All 2 branches covered.">        if (trade.status() == TradeStatus.CANCELED) return trade;</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">        if (!trade.status().isCancelable()) throw invalidStatus(trade);</span>
+        // 주문 생성 응답을 받지 못한 REQUESTED도 같은 키로 주문을 찾아 취소한다.
+<span class="fc bfc" id="L141" title="All 2 branches covered.">        long orderId = trade.paymentId() == null ? payment.createOrder(trade) : trade.paymentId();</span>
+<span class="fc" id="L142">        payment.cancelOrRefund(orderId);</span>
+<span class="fc" id="L143">        market.release(trade.productId(), id);</span>
+<span class="fc" id="L144">        tx.executeWithoutResult(status -&gt; {</span>
+<span class="fc bfc" id="L145" title="All 2 branches covered.">            if (trades.toCanceled(id, reason, memberId) == 1)</span>
+<span class="fc" id="L146">                trades.insertHistory(id, trade.status(), TradeStatus.CANCELED, memberId);</span>
+<span class="fc" id="L147">        });</span>
+<span class="fc" id="L148">        return getTrade(id);</span>
+    }
+    private Trade getTrade(long id) {
+<span class="fc" id="L151">        return trades.findById(id).orElseThrow(() -&gt; new TradeException(ErrorCode.TRADE_NOT_FOUND, &quot;거래가 없습니다.&quot;));</span>
+    }
+    private void requireParticipant(Trade trade, long memberId) {
+<span class="fc bfc" id="L154" title="All 2 branches covered.">        if (!trade.isParticipant(memberId))</span>
+<span class="fc" id="L155">            throw new TradeException(ErrorCode.NOT_TRADE_PARTICIPANT, &quot;거래 당사자만 요청할 수 있습니다.&quot;);</span>
+<span class="fc" id="L156">    }</span>
+    private void requireRole(Trade trade, long memberId, TradeRole role) {
+<span class="fc" id="L158">        requireParticipant(trade, memberId);</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">        if (trade.roleOf(memberId) != role)</span>
+<span class="fc" id="L160">            throw new TradeException(ErrorCode.ROLE_NOT_ALLOWED, &quot;이 작업은 &quot; + role + &quot;만 할 수 있습니다.&quot;);</span>
+<span class="fc" id="L161">    }</span>
+    private TradeException invalidStatus(Trade trade) {
+<span class="fc" id="L163">        return new TradeException(ErrorCode.INVALID_STATUS, trade.status() + &quot; 상태에서 수행할 수 없는 요청입니다.&quot;);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -82,3 +82,7 @@ tasks.named('jacocoTestReport') {
         xml.required = true
     }
 }
+
+tasks.named('bootJar') {
+    archiveFileName = 'app.jar'
+}

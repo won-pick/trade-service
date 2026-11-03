@@ -101,7 +101,10 @@ Start-Window 'Chat' (Join-Path $root 'chat-service') 8080 @{
     CHAT_DB_URL = "jdbc:mysql://localhost:3306/chat_db?$localJdbc"; CHAT_DB_USER = $DbUser; CHAT_DB_PASSWORD = $DbPassword
 } '.\gradlew.bat bootRun'
 
-Start-Window 'Payment' (Join-Path $root 'payment-service\payment') 8084 @{
+# Payment는 2026-10-29에 Gradle 프로젝트를 저장소 최상위로 옮겼다. 예전 구조(payment-service\payment)도 계속 지원한다.
+$paymentDir = Join-Path $root 'payment-service'
+if (-not (Test-Path (Join-Path $paymentDir 'gradlew.bat'))) { $paymentDir = Join-Path $paymentDir 'payment' }
+Start-Window 'Payment' $paymentDir 8084 @{
     PAYMENT_DB_URL = "jdbc:mysql://localhost:3306/payment_db?$localJdbc"
     PAYMENT_DB_USERNAME = $DbUser; PAYMENT_DB_PASSWORD = $DbPassword
 } '.\gradlew.bat bootRun'

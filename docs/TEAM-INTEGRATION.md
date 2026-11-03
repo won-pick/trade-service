@@ -41,7 +41,7 @@ DB는 각 담당 PC의 로컬 MySQL을 사용합니다. 공용 MySQL 서버에 �
 | Payment | localhost:3306 | payment_db | root / 1234 |
 
 MySQL을 먼저 실행한 뒤 각 서버 폴더에서 Gradle bootRun을 실행하세요.
-Payment의 Gradle 프로젝트는 payment-service/payment 폴더에 있습니다.
+Payment의 Gradle 프로젝트는 payment-service 최상위 폴더에 있습니다 (2026-10-29 이전 버전은 payment-service/payment).
 기본 JDBC URL의 createDatabaseIfNotExist=true가 DB를 만들고, schema.sql이 없는 테이블을 생성합니다.
 MySQL 자체 설치·실행과 root 계정 설정은 노트북에 준비돼 있어야 합니다.
 테이블이 이미 있으면 삭제하거나 비우지 않으며, 재시작해도 데이터가 유지됩니다.
